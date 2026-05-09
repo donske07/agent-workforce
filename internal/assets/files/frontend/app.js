@@ -26,7 +26,8 @@ const latestOutputButton = document.querySelector("#latestOutputButton");
 const runList = document.querySelector("#runList");
 const terminalOutput = document.querySelector("#terminalOutput");
 const latestScrollThreshold = 24;
-const promptRedaction = "<prompt redacted>";
+const defaultBubbleText = "Thinking...";
+const bubbleMessageLimit = 80;
 const thinkingAgents = new Set();
 const bubbleMessages = new Map();
 const runRecords = new Map();
@@ -47,7 +48,7 @@ function renderAgents() {
     card.style.setProperty("--agent-color", agent.color);
     card.querySelector("[data-agent-name]").textContent = agent.name;
     card.querySelector("[data-agent-role]").textContent = agent.role;
-    card.querySelector("[data-bubble-text]").textContent = "Thinking...";
+    card.querySelector("[data-bubble-text]").textContent = defaultBubbleText;
     card.setAttribute("aria-label", `${agent.name}, ${agent.role}`);
     office.appendChild(card);
 
@@ -68,18 +69,19 @@ function setAgentThinking(agentId, isThinking, message = "") {
     return;
   }
 
-  if (message) {
-    bubbleMessages.set(agentId, message);
+  const displayMessage = formatBubbleMessage(message);
+  if (displayMessage) {
+    bubbleMessages.set(agentId, displayMessage);
   } else if (!isThinking) {
     bubbleMessages.delete(agentId);
   }
 
   card.classList.toggle("is-thinking", isThinking);
-  card.querySelector("[data-bubble-text]").textContent = bubbleMessages.get(agentId) || "Thinking...";
+  card.querySelector("[data-bubble-text]").textContent = bubbleMessages.get(agentId) || defaultBubbleText;
 
   if (isThinking) {
     thinkingAgents.add(agentId);
-    officeStatus.textContent = message || `Coordinator called ${agent.name}.`;
+    officeStatus.textContent = displayMessage || `Coordinator called ${agent.name}.`;
     return;
   }
 
@@ -181,7 +183,7 @@ function clearThinking() {
   bubbleMessages.clear();
   document.querySelectorAll("[data-agent-card]").forEach((card) => {
     card.classList.remove("is-thinking");
-    card.querySelector("[data-bubble-text]").textContent = "Thinking...";
+    card.querySelector("[data-bubble-text]").textContent = defaultBubbleText;
   });
   officeStatus.textContent = "Ready for the next MCP agent call.";
 
@@ -221,36 +223,147 @@ function runDemo() {
   }, 900);
 }
 
+function formatBubbleMessage(value, limit = bubbleMessageLimit) {
+  const message = String(value || "")
+    .replace(/\\n/g, "\n")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!message) {
+    return "";
+  }
+
+  const characters = Array.from(message);
+  if (characters.length <= limit) {
+    return message;
+  }
+
+  return `${characters.slice(0, Math.max(1, limit - 1)).join("").trimEnd()}…`;
+}
+
+function commandTask(command) {
+  const normalized = String(command || "")
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, '"');
+  const match = normalized.match(/\bTask:\n([\s\S]*?)(?:\n\n(?:Context|Expected output):|\n(?:Context|Expected output):|"\s*$|$)/);
+  return match ? formatBubbleMessage(match[1], 96) : "";
+}
+
+function runTask(event, run) {
+  return formatBubbleMessage(event?.task || run?.task || commandTask(event?.prompt || run?.prompt || event?.command || run?.command), 96);
+}
+
+function outputActivityMessage(chunk) {
+  const lines = String(chunk || "")
+    .replace(/\\n/g, "\n")
+    .split("\n")
+    .map((line) => formatBubbleMessage(line.replace(/^●\s+\[[^\]]+\]\s*/, "")))
+    .filter(Boolean);
+
+  return lines.length > 0 ? lines[lines.length - 1] : "";
+}
+
+function startedRunMessage(run) {
+  const task = runTask(null, run);
+  return task ? `Working on: ${task}` : "Starting agent run...";
+}
+
+function runBubbleMessage(run) {
+  if (run.progress) {
+    return run.progress;
+  }
+  if (run.activity) {
+    return run.activity;
+  }
+  if (run.status === "running") {
+    return startedRunMessage(run);
+  }
+  return defaultBubbleText;
+}
+
+function fallbackAgentCommand(agentId = "", prompt = "") {
+  const command = `forge --agent ${agentId || "<agent>"}`;
+  return prompt ? `${command} -p ${quoteCommandArgument(prompt)}` : command;
+}
+
 function commandAgentId(command) {
   const match = String(command || "").match(/(?:^|\s)--agent(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/);
   return match ? (match[1] || match[2] || match[3] || "") : "";
 }
 
-function redactedAgentCommand(agentId = "") {
-  return `forge --agent ${agentId || "<agent>"} -p ${promptRedaction}`;
+function quoteCommandArgument(value) {
+  return JSON.stringify(String(value || ""));
 }
 
-function redactCommandPrompt(command, agentId = "") {
-  const text = String(command || "").trim();
-  const displayAgentId = agentId || commandAgentId(text) || "<agent>";
-
-  if (!text) {
-    return redactedAgentCommand(displayAgentId);
+function commandPrompt(event, run) {
+  const prompt = String(event?.prompt || run?.prompt || "").trim();
+  if (prompt) {
+    return prompt;
   }
 
-  if (text.includes(promptRedaction)) {
+  const task = String(event?.task || "").trim();
+  if (!task) {
+    return "";
+  }
+
+  const parts = [`Task:\n${task}`];
+  const context = String(event?.context || "").trim();
+  if (context) {
+    parts.push(`Context:\n${context}`);
+  }
+  const expectedOutput = String(event?.expected_output || "").trim();
+  if (expectedOutput) {
+    parts.push(`Expected output:\n${expectedOutput}`);
+  }
+  return parts.join("\n\n");
+}
+
+function promptAgentCommand(agentId, prompt) {
+  return fallbackAgentCommand(agentId, prompt);
+}
+
+function displayCommand(command, agentId = "", prompt = "") {
+  const text = String(command || "").trim();
+  if (text) {
     return text;
   }
+  return fallbackAgentCommand(agentId || "<agent>", prompt);
+}
 
-  const isAgentCommand = /(?:^|\s)(?:\S*\/)?forge(?:\s|$)/.test(text);
-  const hasPromptFlag = /(?:^|\s)(?:-p|--prompt)(?:=|\s+)/.test(text);
-  if (isAgentCommand && hasPromptFlag) {
-    return redactedAgentCommand(displayAgentId);
+function normalizeTerminalText(value) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"');
+}
+
+function displayRunCommand(run) {
+  const command = String(run?.command || "").trim();
+  if (!run?.prompt) {
+    return normalizeTerminalText(command);
   }
 
-  return text
-    .replace(/(\s(?:-p|--prompt)=)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/, `$1${promptRedaction}`)
-    .replace(/(\s(?:-p|--prompt)\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/, `$1${promptRedaction}`);
+  const quotedPrompt = quoteCommandArgument(run.prompt);
+  if (command.endsWith(` -p ${quotedPrompt}`)) {
+    return command.slice(0, -quotedPrompt.length).trimEnd();
+  }
+
+  const agentId = run.agentId || commandAgentId(command) || "<agent>";
+  return `forge --agent ${agentId} -p`;
+}
+
+function renderRunDetails(run) {
+  const details = [`${run.title} · ${run.status}`];
+  const command = displayRunCommand(run);
+  if (command) {
+    details.push(command);
+  }
+  if (run.prompt) {
+    details.push("", "Prompt:", normalizeTerminalText(run.prompt));
+  }
+  return details.join("\n");
 }
 
 function activateRunForEvent(runId) {
@@ -269,12 +382,18 @@ function ensureRun(event) {
 
   if (!runRecords.has(runId)) {
     const agentId = event.agent_id || "unknown-agent";
+    const prompt = commandPrompt(event);
+    const command = displayCommand(event.command, agentId, prompt);
     runRecords.set(runId, {
       id: runId,
       agentId,
       title: event.title || agentId || "Agent Run",
-      command: redactCommandPrompt(event.command, agentId),
+      command,
+      prompt,
+      task: runTask(event, { command, prompt }),
       status: "running",
+      progress: "",
+      activity: "",
       ok: null,
       exitCode: null,
       startedAt: event.timestamp || new Date().toISOString(),
@@ -297,7 +416,12 @@ function handleRunStarted(event) {
   }
 
   run.status = "running";
-  run.command = redactCommandPrompt(event.command || run.command, run.agentId);
+  run.prompt = commandPrompt(event, run);
+  run.command = displayCommand(event.command || run.command, run.agentId, run.prompt);
+  run.task = runTask(event, run);
+  run.progress = "";
+  run.activity = "";
+  setAgentThinking(run.agentId, true, startedRunMessage(run));
   run.startedAt = event.timestamp || run.startedAt;
   runningOutputCount += 1;
   activateRunForEvent(run.id);
@@ -316,6 +440,13 @@ function handleRunOutput(event) {
     sequence: Number(event.sequence || 0),
     text: String(event.chunk || "")
   });
+  const activity = outputActivityMessage(event.chunk);
+  if (activity) {
+    run.activity = activity;
+  }
+  if (thinkingAgents.has(run.agentId)) {
+    setAgentThinking(run.agentId, true, runBubbleMessage(run));
+  }
   activateRunForEvent(run.id);
   markOutputActivity();
   renderOutput();
@@ -328,8 +459,8 @@ function handleRunProgress(event) {
     return;
   }
 
-  run.progress = message;
-  setAgentThinking(run.agentId, true, message);
+  run.progress = formatBubbleMessage(message);
+  setAgentThinking(run.agentId, true, run.progress);
 }
 
 function handleRunFinished(event) {
@@ -412,8 +543,7 @@ function renderActiveRun() {
   }).join("");
 
   terminalOutput.textContent = [
-    `${run.title} · ${run.status}`,
-    run.command,
+    renderRunDetails(run),
     "",
     transcript || "Waiting for output..."
   ].join("\n");

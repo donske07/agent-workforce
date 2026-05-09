@@ -119,11 +119,15 @@ func TestBundledAgentFilesMatchCoordinatorProgrammerArchitecture(t *testing.T) {
 		if strings.Contains(id, "architect") || strings.Contains(strings.ToLower(frontmatter["title"]), "architect") {
 			t.Fatalf("architect bundled agent remains: %s", id)
 		}
+		assertReasoningConfig(t, id, string(data))
 		fileIDs[id] = true
 
 		tools := parseTestAgentTools(t, string(data))
 		if id == CoordinatorAgentID {
 			assertTools(t, id, tools, coordinatorToolProfile(), []string{"write", "patch", "multi_patch", "remove", "undo", "shell", "task"})
+			if !strings.Contains(string(data), "Include the audit trail provided by each successful specialist MCP result") {
+				t.Fatalf("coordinator instructions must require specialist audit trail preservation")
+			}
 			continue
 		}
 		if !strings.HasSuffix(id, "-programmer") {
@@ -150,15 +154,10 @@ func TestCoordinatorAllowsForgeVisibleServerQualifiedMCPWorkflow(t *testing.T) {
 		seen[tool] = true
 	}
 
-	for _, agent := range SpecialistAgents() {
-		serverName := AgentMCPServerName(agent.ID)
-		for _, tool := range []string{
-			ForgeMCPToolName(serverName, NotifyToolName),
-			ForgeMCPToolName(serverName, AgentToolName(agent.ID)),
-		} {
-			if !seen[tool] {
-				t.Fatalf("coordinator is missing Forge-visible server-qualified MCP tool %s", tool)
-			}
+	for _, agentID := range coordinatorMCPAgentIDs() {
+		tool := ForgeMCPToolName(AgentMCPServerName(agentID), AgentToolName(agentID))
+		if !seen[tool] {
+			t.Fatalf("coordinator is missing Forge-visible server-qualified MCP tool %s", tool)
 		}
 	}
 
@@ -171,24 +170,34 @@ func TestCoordinatorAllowsForgeVisibleServerQualifiedMCPWorkflow(t *testing.T) {
 		for _, tool := range []string{
 			ForgeMCPToolName(PackageName, NotifyToolName),
 			ForgeMCPToolName(PackageName, AgentToolName(agent.ID)),
+			ForgeMCPToolName(AgentMCPServerName(agent.ID), NotifyToolName),
 		} {
 			if seen[tool] {
-				t.Fatalf("coordinator should use server-qualified Forge-visible MCP wrappers, but found aggregate tool %s", tool)
+				t.Fatalf("coordinator should use explicit server-qualified specialist wrappers only, but found %s", tool)
 			}
 		}
 	}
 }
 
 func coordinatorToolProfile() []string {
-	tools := []string{"sem_search", "fs_search", "read", "fetch", "followup", "skill", "plan", "todo_write", "todo_read", "agent_workforce_*"}
-	for _, agent := range SpecialistAgents() {
-		serverName := AgentMCPServerName(agent.ID)
-		tools = append(tools,
-			ForgeMCPToolName(serverName, NotifyToolName),
-			ForgeMCPToolName(serverName, AgentToolName(agent.ID)),
-		)
+	tools := []string{"sem_search", "fs_search", "read", "fetch", "followup", "skill", "plan", "todo_write", "todo_read"}
+	for _, agentID := range coordinatorMCPAgentIDs() {
+		serverName := AgentMCPServerName(agentID)
+		tools = append(tools, ForgeMCPToolName(serverName, AgentToolName(agentID)))
 	}
 	return tools
+}
+
+func coordinatorMCPAgentIDs() []string {
+	return []string{
+		"mcp-agent-platform-programmer",
+		"backend-programmer",
+		"frontend-programmer",
+		"ai-model-programmer",
+		"workflow-programmer",
+		"policy-programmer",
+		"data-programmer",
+	}
 }
 
 func programmerToolProfile() []string {
@@ -209,6 +218,20 @@ func assertTools(t *testing.T, id string, got, want, forbidden []string) {
 			if tool == bad || (strings.HasSuffix(bad, "*") && strings.HasPrefix(tool, strings.TrimSuffix(bad, "*"))) {
 				t.Fatalf("%s has forbidden tool %s", id, tool)
 			}
+		}
+	}
+}
+
+func assertReasoningConfig(t *testing.T, id, content string) {
+	t.Helper()
+	frontmatter := parseTestAgentFrontmatter(t, content)
+	if frontmatter["reasoning"] != "" {
+		t.Fatalf("%s reasoning frontmatter should be an object, got inline value %q", id, frontmatter["reasoning"])
+	}
+	want := map[string]string{"enabled": "true", "effort": "high", "exclude": "false", "tool_supported": "false"}
+	for key, expected := range want {
+		if got := frontmatter[key]; got != expected {
+			t.Fatalf("%s reasoning.%s mismatch: got %q want %q", id, key, got, expected)
 		}
 	}
 }

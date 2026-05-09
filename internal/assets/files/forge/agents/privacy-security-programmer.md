@@ -2,6 +2,11 @@
 id: privacy-security-programmer
 title: Privacy Security Programmer
 description: Designs and implements privacy, security, retention, access control, auditability, safe logging, secret handling, and security validation.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

@@ -54,6 +54,7 @@ var (
 	forgeRunSerial               uint64
 	forgeLifecycleLineRegexp     = regexp.MustCompile(`^● \[[0-9]{2}:[0-9]{2}:[0-9]{2}\] (Initialize|Finished)\b`)
 	forgeProgressInterruptRegexp = regexp.MustCompile(`^\S+\s+.+?\s+[0-9]+(?::[0-9]+)?[smh]?\s+· Ctrl\+C to interrupt$`)
+	tokenEstimateRegexp          = regexp.MustCompile(`[[:alnum:]_]+|[^[:space:]]`)
 )
 
 type officeNotifier func(agentID, state, title, officeURL string) bool
@@ -281,24 +282,8 @@ func toolDefinitionForAgent(agent product.Agent) map[string]any {
 	}
 }
 
-func notifyToolDefinition() map[string]any {
-	return map[string]any{
-		"name":        product.NotifyToolName,
-		"description": "Update the Pixel Agent Office state for a specialist agent.",
-		"inputSchema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"agent_id": map[string]any{"type": "string"},
-				"state":    map[string]any{"type": "string", "enum": []string{product.OfficeStateThinking, product.OfficeStateIdle}},
-				"title":    map[string]any{"type": "string"},
-			},
-			"required": []string{"agent_id", "state"},
-		},
-	}
-}
-
 func (s *serverState) toolDefinitions() map[string]any {
-	tools := []map[string]any{notifyToolDefinition()}
+	tools := []map[string]any{}
 	if s.agent != nil {
 		tools = append(tools, toolDefinitionForAgent(*s.agent))
 	} else {
@@ -325,10 +310,6 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 	if args == nil {
 		args = map[string]any{}
 	}
-	if params.Name == product.NotifyToolName {
-		ok := s.notify(toString(args["agent_id"]), toString(args["state"]), toString(args["title"]), os.Getenv("AGENT_WORKFORCE_OFFICE_URL"))
-		return textResult(map[string]any{"ok": ok})
-	}
 	agent, ok := s.agentForTool(params.Name)
 	if !ok {
 		return textResult(map[string]any{"ok": false, "error": "unknown tool: " + params.Name})
@@ -347,18 +328,20 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 	notified := s.notify(agent.ID, product.OfficeStateThinking, agent.Title, officeURL)
 	runID := newForgeRunID(agent.ID)
 	s.postForgeEvent(map[string]any{
-		"type":            forgeRunStartedEvent,
-		"run_id":          runID,
-		"agent_id":        agent.ID,
-		"title":           agent.Title,
-		"sequence":        0,
-		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
-		"command":         fmt.Sprintf("forge --agent %s -p <prompt redacted>", agent.ID),
-		"prompt_redacted": true,
+		"type":      forgeRunStartedEvent,
+		"run_id":    runID,
+		"agent_id":  agent.ID,
+		"title":     agent.Title,
+		"task":      task,
+		"prompt":    prompt,
+		"sequence":  0,
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"command":   fmt.Sprintf("forge --agent %s -p %s", agent.ID, strconv.Quote(prompt)),
 	}, officeURL)
 	var sequence int64
 	var progressMu sync.Mutex
 	lastProgressMessage := ""
+	runStartedAt := time.Now()
 	result := s.run(agent, prompt, func(stream, chunk string) {
 		for _, event := range classifyForgeStreamEvents(chunk, maxForgeOutputChunkSize) {
 			if event.Text == "" {
@@ -398,27 +381,34 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 			}, officeURL)
 		}
 	})
+	runElapsed := time.Since(runStartedAt)
 	success := result.Err == nil && result.ExitCode == 0
+	cleanedOutput := cleanForgeText(result.Output)
+	cleanedStderr := cleanForgeText(result.Stderr)
+	tokenUsage := estimateForgeTokenUsage(prompt, cleanedOutput, cleanedStderr)
+	auditTrail := specialistAuditTrail(agent, success, runElapsed, tokenUsage)
 	s.postForgeEvent(map[string]any{
-		"type":      forgeRunFinishedEvent,
-		"run_id":    runID,
-		"agent_id":  agent.ID,
-		"title":     agent.Title,
-		"ok":        success,
-		"exit_code": result.ExitCode,
-		"sequence":  atomic.AddInt64(&sequence, 1),
-		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"type":        forgeRunFinishedEvent,
+		"run_id":      runID,
+		"agent_id":    agent.ID,
+		"title":       agent.Title,
+		"ok":          success,
+		"exit_code":   result.ExitCode,
+		"elapsed":     formatElapsed(runElapsed),
+		"elapsed_ms":  runElapsed.Milliseconds(),
+		"token_usage": tokenUsage,
+		"sequence":    atomic.AddInt64(&sequence, 1),
+		"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
 	}, officeURL)
 	idleNotified := false
 	if notified {
 		idleNotified = s.notifyIdleAfterDelay(agent.ID, agent.Title, officeURL)
 	}
-	cleanedOutput := cleanForgeText(result.Output)
 	output := extractFinalAnswer(cleanedOutput)
 	stderr := ""
 	if !success {
 		output = truncateText(output, maxFailureOutputChars)
-		stderr = truncateText(cleanForgeText(result.Stderr), maxFailureOutputChars)
+		stderr = truncateText(cleanedStderr, maxFailureOutputChars)
 	}
 	payload := map[string]any{
 		"ok":            success,
@@ -426,10 +416,19 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 		"idle_notified": idleNotified,
 		"agent_id":      agent.ID,
 		"title":         agent.Title,
+		"mcp_server":    product.AgentMCPServerName(agent.ID),
+		"mcp_tool":      product.AgentToolName(agent.ID),
 		"output":        output,
 		"stderr":        stderr,
 		"exit_code":     result.ExitCode,
+		"elapsed":       formatElapsed(runElapsed),
+		"elapsed_ms":    runElapsed.Milliseconds(),
+		"token_usage":   tokenUsage,
+		"audit_trail":   []map[string]any{auditTrail},
 		"idle_after_ms": s.idleDelay.Milliseconds(),
+	}
+	if totalTokens, ok := int64FromAny(tokenUsage["total_tokens"]); ok {
+		payload["tokens_consumed"] = totalTokens
 	}
 	if result.Err != nil {
 		payload["error"] = result.Err.Error()
@@ -614,6 +613,97 @@ func truncateText(value string, limit int) string {
 	return strings.TrimSpace(string(runes[:limit])) + "\n\n[output truncated]"
 }
 
+func estimateForgeTokenUsage(prompt, output, stderr string) map[string]any {
+	inputTokens := estimateTokens(prompt)
+	outputTokens := estimateTokens(output)
+	stderrTokens := estimateTokens(stderr)
+	return map[string]any{
+		"source":        "estimated",
+		"estimated":     true,
+		"input_tokens":  inputTokens,
+		"output_tokens": outputTokens,
+		"stderr_tokens": stderrTokens,
+		"total_tokens":  inputTokens + outputTokens + stderrTokens,
+	}
+}
+
+func estimateTokens(value string) int64 {
+	value = strings.TrimSpace(removeControlChars(ansiCSIRegexp.ReplaceAllString(ansiOSCRegexp.ReplaceAllString(value, ""), "")))
+	if value == "" {
+		return 0
+	}
+	matches := tokenEstimateRegexp.FindAllString(value, -1)
+	if len(matches) == 0 {
+		return 0
+	}
+	return int64(len(matches))
+}
+
+func specialistAuditTrail(agent product.Agent, success bool, elapsed time.Duration, tokenUsage map[string]any) map[string]any {
+	status := "Completed"
+	if !success {
+		status = "Failed"
+	}
+	return map[string]any{
+		"consulted_agent_id":    agent.ID,
+		"consulted_agent_title": agent.Title,
+		"mcp_server":            product.AgentMCPServerName(agent.ID),
+		"mcp_tool":              product.AgentToolName(agent.ID),
+		"status":                status,
+		"elapsed":               formatElapsed(elapsed),
+		"elapsed_ms":            elapsed.Milliseconds(),
+		"token_usage":           tokenUsage,
+	}
+}
+
+func formatElapsed(elapsed time.Duration) string {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	elapsed = elapsed.Round(time.Millisecond)
+	if elapsed == 0 {
+		return "0ms"
+	}
+	return elapsed.String()
+}
+
+func int64FromAny(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint:
+		return int64(v), true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		if v > uint64(1<<63-1) {
+			return 0, false
+		}
+		return int64(v), true
+	case float32:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	case json.Number:
+		parsed, err := v.Int64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
 func removeControlChars(value string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\t' || r == '\n' {
@@ -688,9 +778,98 @@ func specialistSuccessResult(payload map[string]any) map[string]any {
 		payload["output"] = output
 	}
 	return map[string]any{
-		"content":           []map[string]string{{"type": "text", "text": output}},
+		"content":           []map[string]string{{"type": "text", "text": specialistContentText(payload)}},
 		"structuredContent": payload,
 	}
+}
+
+func specialistContentText(payload map[string]any) string {
+	output := strings.TrimSpace(toString(payload["output"]))
+	if audit := auditTrailMarkdown(payload["audit_trail"]); audit != "" {
+		if output == "" {
+			return audit
+		}
+		return output + "\n\n" + audit
+	}
+	return output
+}
+
+func auditTrailMarkdown(value any) string {
+	entries := auditTrailEntries(value)
+	if len(entries) == 0 {
+		return ""
+	}
+
+	var out strings.Builder
+	out.WriteString("## Audit Trail\n\n")
+	out.WriteString("| Consulted MCP agent | Status | Tokens consumed | Response time |\n")
+	out.WriteString("|---|---|---|---|\n")
+	for _, entry := range entries {
+		out.WriteString("| ")
+		out.WriteString(markdownTableCell(auditAgentName(entry)))
+		out.WriteString(" | ")
+		out.WriteString(markdownTableCell(toString(entry["status"])))
+		out.WriteString(" | ")
+		out.WriteString(markdownTableCell(auditTokenSummary(entry["token_usage"])))
+		out.WriteString(" | ")
+		out.WriteString(markdownTableCell(toString(entry["elapsed"])))
+		out.WriteString(" |\n")
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func auditTrailEntries(value any) []map[string]any {
+	switch entries := value.(type) {
+	case []map[string]any:
+		return entries
+	case []any:
+		out := make([]map[string]any, 0, len(entries))
+		for _, entry := range entries {
+			if item, ok := entry.(map[string]any); ok {
+				out = append(out, item)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func auditAgentName(entry map[string]any) string {
+	title := strings.TrimSpace(toString(entry["consulted_agent_title"]))
+	id := strings.TrimSpace(toString(entry["consulted_agent_id"]))
+	if title == "" {
+		return id
+	}
+	if id == "" || id == title {
+		return title
+	}
+	return fmt.Sprintf("%s (`%s`)", title, id)
+}
+
+func auditTokenSummary(value any) string {
+	usage, ok := value.(map[string]any)
+	if !ok {
+		return "Unavailable"
+	}
+	total, ok := int64FromAny(usage["total_tokens"])
+	if !ok || total <= 0 {
+		return "Unavailable"
+	}
+	if estimated, _ := usage["estimated"].(bool); estimated || toString(usage["source"]) == "estimated" {
+		return fmt.Sprintf("~%d estimated", total)
+	}
+	return fmt.Sprintf("%d", total)
+}
+
+func markdownTableCell(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Unavailable"
+	}
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\n", "<br>")
+	return value
 }
 
 func textResult(payload map[string]any) map[string]any {

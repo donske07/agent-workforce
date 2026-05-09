@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ import (
 	"github.com/agent-workforce/agent-workforce/internal/product"
 )
 
-func TestScopedToolDefinitionsExposeOnlySelectedSpecialistAndNotify(t *testing.T) {
+func TestScopedToolDefinitionsExposeOnlySelectedSpecialist(t *testing.T) {
 	frontend, ok := findSpecialistAgent("frontend-programmer")
 	if !ok {
 		t.Fatal("missing frontend specialist")
@@ -34,8 +35,8 @@ func TestScopedToolDefinitionsExposeOnlySelectedSpecialistAndNotify(t *testing.T
 		name, _ := tool["name"].(string)
 		seen[name] = true
 	}
-	if !seen[product.NotifyToolName] {
-		t.Fatalf("missing notify tool %s", product.NotifyToolName)
+	if seen[product.NotifyToolName] {
+		t.Fatalf("scoped MCP should not expose notify tool %s", product.NotifyToolName)
 	}
 	if !seen[product.AgentToolName(frontend.ID)] {
 		t.Fatalf("missing scoped agent tool %s", product.AgentToolName(frontend.ID))
@@ -49,8 +50,8 @@ func TestScopedToolDefinitionsExposeOnlySelectedSpecialistAndNotify(t *testing.T
 	if seen[product.AgentToolName(product.CoordinatorAgentID)] {
 		t.Fatalf("coordinator must not be exposed as an MCP specialist tool")
 	}
-	if len(tools) != 2 {
-		t.Fatalf("unexpected scoped tool count: got %d want 2", len(tools))
+	if len(tools) != 1 {
+		t.Fatalf("unexpected scoped tool count: got %d want 1", len(tools))
 	}
 }
 
@@ -71,6 +72,9 @@ func TestUnscopedToolDefinitionsRemainAvailableForCompatibility(t *testing.T) {
 		if !seen[name] {
 			t.Fatalf("missing agent tool %s", name)
 		}
+	}
+	if seen[product.NotifyToolName] {
+		t.Fatalf("unscoped MCP server should not expose notify tool %s", product.NotifyToolName)
 	}
 	if seen[product.AgentToolName(product.CoordinatorAgentID)] {
 		t.Fatalf("coordinator must not be exposed as an MCP specialist tool")
@@ -158,8 +162,8 @@ PY
 		t.Fatalf("frontend specialist response missing expected content: %q", output)
 	}
 	visibleContent := callResult["content"].([]map[string]string)[0]["text"]
-	if visibleContent != output {
-		t.Fatalf("visible MCP response should be the specialist final answer, got %q want %q", visibleContent, output)
+	if !strings.Contains(visibleContent, output) || !strings.Contains(visibleContent, "## Audit Trail") {
+		t.Fatalf("visible MCP response should include specialist final answer and audit trail, got %q", visibleContent)
 	}
 
 	data, err := os.ReadFile(logPath)
@@ -323,6 +327,41 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 	if payload["idle_after_ms"] != int64(0) {
 		t.Fatalf("unexpected idle delay: %#v", payload["idle_after_ms"])
 	}
+	if payload["mcp_server"] != product.AgentMCPServerName("frontend-programmer") {
+		t.Fatalf("unexpected MCP server: %#v", payload["mcp_server"])
+	}
+	if payload["mcp_tool"] != product.AgentToolName("frontend-programmer") {
+		t.Fatalf("unexpected MCP tool: %#v", payload["mcp_tool"])
+	}
+	elapsedMS, ok := payload["elapsed_ms"].(int64)
+	if !ok || elapsedMS < 0 {
+		t.Fatalf("expected elapsed_ms audit metadata, got %#v", payload["elapsed_ms"])
+	}
+	tokenUsage, ok := payload["token_usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected token usage metadata, got %#v", payload["token_usage"])
+	}
+	if tokenUsage["estimated"] != true || tokenUsage["source"] != "estimated" {
+		t.Fatalf("expected estimated token usage, got %#v", tokenUsage)
+	}
+	totalTokens, ok := int64FromAny(tokenUsage["total_tokens"])
+	if !ok || totalTokens <= 0 {
+		t.Fatalf("expected positive total token usage, got %#v", tokenUsage["total_tokens"])
+	}
+	if payload["tokens_consumed"] != totalTokens {
+		t.Fatalf("tokens_consumed should mirror total token usage, got %#v want %#v", payload["tokens_consumed"], totalTokens)
+	}
+	auditTrail, ok := payload["audit_trail"].([]map[string]any)
+	if !ok || len(auditTrail) != 1 {
+		t.Fatalf("expected one audit trail entry, got %#v", payload["audit_trail"])
+	}
+	if auditTrail[0]["consulted_agent_id"] != "frontend-programmer" || auditTrail[0]["status"] != "Completed" {
+		t.Fatalf("unexpected audit trail entry: %#v", auditTrail[0])
+	}
+	contentText := result["content"].([]map[string]string)[0]["text"]
+	if !strings.Contains(contentText, "## Audit Trail") || !strings.Contains(contentText, "Frontend Programmer (`frontend-programmer`)") || !strings.Contains(contentText, "estimated") {
+		t.Fatalf("visible response missing audit trail:\n%s", contentText)
+	}
 	if ranAgent.ID != "frontend-programmer" {
 		t.Fatalf("unexpected forge agent: %s", ranAgent.ID)
 	}
@@ -347,6 +386,31 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 	}
 	if postedEvents[0]["type"] != forgeRunStartedEvent || postedEvents[5]["type"] != forgeRunFinishedEvent {
 		t.Fatalf("unexpected forge lifecycle events: %#v", postedEvents)
+	}
+	command, ok := postedEvents[0]["command"].(string)
+	if !ok || !strings.HasPrefix(command, "forge --agent frontend-programmer -p ") || !strings.Contains(command, "Task:\\nsay hi") {
+		t.Fatalf("unexpected visible command event: %#v", postedEvents[0])
+	}
+	if strings.Contains(strings.ToLower(command), "redact") {
+		t.Fatalf("start event command should display delegated prompt, got %q", command)
+	}
+	quotedPrompt := strings.TrimPrefix(command, "forge --agent frontend-programmer -p ")
+	unquotedPrompt, err := strconv.Unquote(quotedPrompt)
+	if err != nil {
+		t.Fatalf("command prompt should be shell-quoted with strconv.Quote-compatible syntax, got %q: %v", quotedPrompt, err)
+	}
+	if unquotedPrompt != ranPrompt {
+		t.Fatalf("command prompt should match delegated forge prompt:\ngot  %q\nwant %q", unquotedPrompt, ranPrompt)
+	}
+	if postedEvents[0]["task"] != "say hi" {
+		t.Fatalf("start event should include task summary, got %#v", postedEvents[0])
+	}
+	prompt, ok := postedEvents[0]["prompt"].(string)
+	if !ok || prompt != ranPrompt || !strings.Contains(prompt, "Task:\nsay hi") {
+		t.Fatalf("start event should include full visible prompt, got %#v want %q", postedEvents[0], ranPrompt)
+	}
+	if strings.Contains(strings.ToLower(prompt), "redact") {
+		t.Fatalf("start event prompt should not be redacted: %q", prompt)
 	}
 	if postedEvents[1]["type"] != forgeOutputEvent || postedEvents[1]["stream"] != "stdout" || postedEvents[1]["chunk"] != "streamed hello" {
 		t.Fatalf("unexpected stdout forge event: %#v", postedEvents[1])
@@ -402,8 +466,8 @@ func TestSpecialistToolCallReturnsFinalAnswerOnly(t *testing.T) {
 		t.Fatalf("output missing final answer content:\n%s", output)
 	}
 	content := result["content"].([]map[string]string)
-	if content[0]["text"] != output {
-		t.Fatalf("visible MCP text should be final answer only, got %q want %q", content[0]["text"], output)
+	if !strings.Contains(content[0]["text"], output) || !strings.Contains(content[0]["text"], "## Audit Trail") {
+		t.Fatalf("visible MCP text should include final answer and audit trail, got %q", content[0]["text"])
 	}
 }
 
@@ -676,26 +740,25 @@ func TestScopedRunStdioListsOnlySelectedAgentTool(t *testing.T) {
 	for _, tool := range response.Result.Tools {
 		seen[tool.Name] = true
 	}
-	if !seen[product.NotifyToolName] || !seen[product.AgentToolName("frontend-programmer")] {
-		t.Fatalf("missing scoped tools in response: %#v", seen)
+	if seen[product.NotifyToolName] {
+		t.Fatalf("scoped stdio should not expose notify tool: %#v", seen)
+	}
+	if !seen[product.AgentToolName("frontend-programmer")] {
+		t.Fatalf("missing scoped frontend tool in response: %#v", seen)
 	}
 	if seen[product.AgentToolName("backend-programmer")] {
 		t.Fatalf("scoped stdio exposed backend tool: %#v", seen)
 	}
-	if len(response.Result.Tools) != 2 {
-		t.Fatalf("unexpected scoped stdio tool count: got %d want 2", len(response.Result.Tools))
+	if len(response.Result.Tools) != 1 {
+		t.Fatalf("unexpected scoped stdio tool count: got %d want 1", len(response.Result.Tools))
 	}
 }
 
-func TestNotifyToolRemainsNotificationOnly(t *testing.T) {
-	var notified bool
+func TestNotifyToolIsNotExposedForToolCalls(t *testing.T) {
 	state := &serverState{
 		notifyOffice: func(agentID, state, title, officeURL string) bool {
-			notified = true
-			if agentID != "frontend-programmer" || state != product.OfficeStateThinking || title != "Frontend Programmer" {
-				t.Fatalf("unexpected notification: %s %s %s", agentID, state, title)
-			}
-			return true
+			t.Fatal("notify tool should not be callable")
+			return false
 		},
 		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 			t.Fatal("notify tool should not run forge")
@@ -705,8 +768,11 @@ func TestNotifyToolRemainsNotificationOnly(t *testing.T) {
 
 	result := state.handleToolCall(callParams{Name: product.NotifyToolName, Arguments: map[string]any{"agent_id": "frontend-programmer", "state": product.OfficeStateThinking, "title": "Frontend Programmer"}})
 	payload := decodeTextPayload(t, result)
-	if payload["ok"] != true || !notified {
-		t.Fatalf("unexpected notify result: %#v notified=%v", payload, notified)
+	if payload["ok"] != false {
+		t.Fatalf("expected notify tool call to fail, got %#v", payload)
+	}
+	if !strings.Contains(payload["error"].(string), "unknown tool") {
+		t.Fatalf("unexpected notify error: %#v", payload["error"])
 	}
 }
 

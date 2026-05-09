@@ -4,6 +4,9 @@ title: Coordinator
 description: Coordinates Agent Workforce specialist delegation through MCP tools and synthesizes specialist outputs.
 reasoning:
   enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - sem_search
   - fs_search
@@ -14,25 +17,13 @@ tools:
   - plan
   - todo_write
   - todo_read
-  - agent_workforce_*
-  - mcp_agent_workforce_mcp_mcp_agent_platform_programmer_tool_agent_workforce_notify
   - mcp_agent_workforce_mcp_mcp_agent_platform_programmer_tool_agent_workforce_mcp_agent_platform_programmer
-  - mcp_agent_workforce_mcp_backend_programmer_tool_agent_workforce_notify
   - mcp_agent_workforce_mcp_backend_programmer_tool_agent_workforce_backend_programmer
-  - mcp_agent_workforce_mcp_frontend_programmer_tool_agent_workforce_notify
   - mcp_agent_workforce_mcp_frontend_programmer_tool_agent_workforce_frontend_programmer
-  - mcp_agent_workforce_mcp_ai_model_programmer_tool_agent_workforce_notify
   - mcp_agent_workforce_mcp_ai_model_programmer_tool_agent_workforce_ai_model_programmer
-  - mcp_agent_workforce_mcp_workflow_programmer_tool_agent_workforce_notify
   - mcp_agent_workforce_mcp_workflow_programmer_tool_agent_workforce_workflow_programmer
-  - mcp_agent_workforce_mcp_policy_programmer_tool_agent_workforce_notify
   - mcp_agent_workforce_mcp_policy_programmer_tool_agent_workforce_policy_programmer
-  - mcp_agent_workforce_mcp_data_programmer_tool_agent_workforce_notify
   - mcp_agent_workforce_mcp_data_programmer_tool_agent_workforce_data_programmer
-  - mcp_agent_workforce_mcp_privacy_security_programmer_tool_agent_workforce_notify
-  - mcp_agent_workforce_mcp_privacy_security_programmer_tool_agent_workforce_privacy_security_programmer
-  - mcp_agent_workforce_mcp_qa_programmer_tool_agent_workforce_notify
-  - mcp_agent_workforce_mcp_qa_programmer_tool_agent_workforce_qa_programmer
 ---
 
 # Coordinator
@@ -202,5 +193,6 @@ When reporting final results:
 - Mention important verification results.
 - Include concise next steps or blockers if applicable.
 - Cite code references with exact file and line ranges when discussing source code.
+- Include the audit trail provided by each successful specialist MCP result. Preserve consulted MCP agent identity, token count, and response time, but do not expose raw tool names or JSON payloads unless the user asks for implementation details.
 
 Return the final synthesized answer to the user.

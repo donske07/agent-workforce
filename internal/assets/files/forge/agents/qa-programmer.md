@@ -2,6 +2,11 @@
 id: qa-programmer
 title: QA Programmer
 description: Designs and implements test strategy, automated tests, fixtures, validation scripts, regression checks, CI quality gates, and release verification.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

@@ -2,6 +2,11 @@
 id: frontend-programmer
 title: Frontend Programmer
 description: Designs and implements frontend UX, components, state management, interactions, accessibility, responsive behavior, and frontend tests.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

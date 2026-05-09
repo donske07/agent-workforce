@@ -77,6 +77,36 @@ func TestForgeEventAcceptsValidOutputEvent(t *testing.T) {
 	}
 }
 
+func TestFrontendAppDisplaysForgeRunPrompt(t *testing.T) {
+	server := httptest.NewServer(NewHandler())
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status: got %d want %d", resp.StatusCode, http.StatusOK)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	for _, forbidden := range []string{"<prompt redacted>", "promptRedaction", "redactCommandPrompt", "prompt_redacted"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("frontend app should not redact delegated forge prompts; found %q", forbidden)
+		}
+	}
+	for _, want := range []string{"event?.prompt", "run?.prompt", "normalizeTerminalText(run.prompt)", "renderRunDetails(run)"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("frontend app missing visible prompt display logic %q", want)
+		}
+	}
+}
+
 func TestForgeEventRejectsInvalidOutputEvent(t *testing.T) {
 	server := httptest.NewServer(NewHandler())
 	defer server.Close()

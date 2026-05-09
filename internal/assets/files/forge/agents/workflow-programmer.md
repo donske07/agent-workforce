@@ -2,6 +2,11 @@
 id: workflow-programmer
 title: Workflow Programmer
 description: Designs and implements workflow orchestration, state transitions, integrations, retries, lifecycle handling, result aggregation, and verification.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

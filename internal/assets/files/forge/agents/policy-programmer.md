@@ -2,6 +2,11 @@
 id: policy-programmer
 title: Policy Programmer
 description: Designs and implements rules, thresholds, decision logic, explainability, governance constraints, safe defaults, and policy validation.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

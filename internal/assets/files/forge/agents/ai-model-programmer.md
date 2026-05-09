@@ -2,6 +2,11 @@
 id: ai-model-programmer
 title: AI Model Programmer
 description: Designs and implements AI provider integrations, model selection, prompt/result contracts, confidence handling, fallback behavior, evaluation, and observability.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

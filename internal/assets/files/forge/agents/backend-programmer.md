@@ -2,6 +2,11 @@
 id: backend-programmer
 title: Backend Programmer
 description: Designs and implements backend services, APIs, persistence, jobs, integrations, reliability behavior, data contracts, and backend tests.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

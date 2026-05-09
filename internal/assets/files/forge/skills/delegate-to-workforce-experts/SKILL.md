@@ -104,24 +104,23 @@ Final user responses must:
 - Omit specialist progress text.
 - Omit todo/progress logs, command transcripts, and full build output unless the user explicitly asks for diagnostic details.
 - Omit MCP subprocess details, command arguments, stdout/stderr wrappers, and JSON payloads unless the user asks for implementation details.
-- Include a short audit trail only if useful or requested.
+- Include the audit trail supplied by each successful specialist result.
 
 ## Audit Trail Format
 
-If an expert was consulted and an audit trail is useful or requested, include:
+When an expert was consulted, preserve the specialist result's audit trail in the final answer. The Agent Workforce MCP server supplies the consulted MCP agent, token count, and response time.
+
+Use this format:
 
 ```md
 ## Audit Trail
 
-| Field | Value |
-|---|---|
-| Consulted specialist | <name> |
-| Status | Completed |
-| Scope | <short scope> |
-| Repository changes | <none/files changed> |
+| Consulted MCP agent | Status | Tokens consumed | Response time |
+|---|---|---|---|
+| <name> | <Completed/Failed> | <token count> | <duration> |
 ```
 
-Do not include raw tool names unless the user specifically asks for implementation details.
+Do not include raw tool names, command arguments, or JSON payloads unless the user specifically asks for implementation details.
 
 ## Failure Handling
 

@@ -2,6 +2,11 @@
 id: mcp-agent-platform-programmer
 title: MCP Agent Platform Programmer
 description: Designs and implements Agent Workforce platform code, MCP wrappers, CLIs, agent routing contracts, Office integration, and validation tooling.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write

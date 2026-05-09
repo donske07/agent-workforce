@@ -2,6 +2,11 @@
 id: data-programmer
 title: Data Programmer
 description: Designs and implements data schemas, storage models, migrations, indexing, reporting models, taxonomy structures, and cross-system data contracts.
+reasoning:
+  enabled: true
+  effort: high
+  exclude: false
+  tool_supported: false
 tools:
   - read
   - write
