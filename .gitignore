@@ -1,0 +1,32 @@
+# Build artifacts
+/agent-workforce
+/agent-workforce-mcp
+/bin/
+/dist/
+/build/
+*.test
+*.out
+coverage.*
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor and tool state
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and temporary files
+*.log
+*.tmp
+.tmp/
+tmp/
+

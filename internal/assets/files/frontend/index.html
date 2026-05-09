@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Forge Agent Office</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="control-panel" aria-labelledby="app-title">
+        <div>
+          <p class="eyebrow">Forge MCP Monitor</p>
+          <h1 id="app-title">Pixel Agent Office</h1>
+          <p class="intro">
+            Keep this page open while Forge works. MCP agent calls will turn on
+            the matching thinking bubble, then turn it off when the call ends.
+          </p>
+        </div>
+
+        <div class="forge-console" aria-live="polite">
+          <div class="console-avatar" aria-hidden="true">F</div>
+          <div>
+            <p class="console-label">Default Forge</p>
+            <p id="forgeStatus">Connected to the office event stream.</p>
+          </div>
+        </div>
+
+        <div class="controls" aria-label="Agent call controls">
+          <button type="button" id="clearButton" class="secondary-button">
+            Clear bubbles
+          </button>
+          <button type="button" id="demoButton" class="primary-button">
+            Run delegation demo
+          </button>
+        </div>
+
+        <div class="server-note">
+          <span class="status-light" id="connectionLight" aria-hidden="true"></span>
+          <span id="connectionStatus">Connecting...</span>
+        </div>
+
+        <div id="agentButtons" class="agent-buttons" aria-label="Manually preview expert bubbles"></div>
+      </section>
+
+      <section class="office-wrap" aria-label="Pixel office showing specialist agents">
+        <div class="office" id="office" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <template id="agentTemplate">
+      <article class="desk" data-agent-card>
+        <div class="bubble" data-bubble>
+          <span class="bubble-text" data-bubble-text>Thinking...</span>
+          <span class="dot dot-one"></span>
+          <span class="dot dot-two"></span>
+          <span class="dot dot-three"></span>
+        </div>
+        <div class="monitor" aria-hidden="true"></div>
+        <div class="human" aria-hidden="true">
+          <div class="head"></div>
+          <div class="body"></div>
+          <div class="arm arm-left"></div>
+          <div class="arm arm-right"></div>
+          <div class="leg leg-left"></div>
+          <div class="leg leg-right"></div>
+        </div>
+        <div class="desk-top" aria-hidden="true"></div>
+        <h2 data-agent-name></h2>
+        <p data-agent-role></p>
+      </article>
+    </template>
+
+    <script src="./agents.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
