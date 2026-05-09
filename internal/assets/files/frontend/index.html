@@ -7,16 +7,33 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <section class="control-panel" aria-labelledby="app-title">
-        <div>
-          <p class="eyebrow">Forge MCP Monitor</p>
-          <h1 id="app-title">Pixel Agent Office</h1>
-          <p class="intro">
-            Keep this page open while Forge works. MCP agent calls will turn on
-            the matching thinking bubble, then turn it off when the call ends.
-          </p>
+    <main class="app-shell is-monitor-collapsed is-output-collapsed" id="appShell">
+      <div class="top-bar" aria-label="Office display controls">
+        <button type="button" id="monitorToggle" class="secondary-button toggle-button" aria-expanded="false" aria-controls="monitorPanel">
+          Show Monitor
+        </button>
+        <button type="button" id="focusButton" class="primary-button toggle-button">
+          Focus Pixels
+        </button>
+        <button type="button" id="outputToggle" class="secondary-button toggle-button" aria-expanded="false" aria-controls="outputPanel">
+          Show Output • 0
+        </button>
+      </div>
+
+      <section class="control-panel" id="monitorPanel" aria-labelledby="app-title" hidden>
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Forge MCP Monitor</p>
+            <h1 id="app-title">Pixel Agent Office</h1>
+          </div>
+          <button type="button" id="hideMonitorButton" class="icon-button" aria-label="Hide Forge MCP Monitor">
+            Hide
+          </button>
         </div>
+        <p class="intro">
+          Keep this page open while Forge works. MCP agent calls will turn on
+          the matching thinking bubble, then turn it off when the call ends.
+        </p>
 
         <div class="forge-console" aria-live="polite">
           <div class="console-avatar" aria-hidden="true">F</div>
@@ -43,8 +60,27 @@
         <div id="agentButtons" class="agent-buttons" aria-label="Manually preview expert bubbles"></div>
       </section>
 
-      <section class="office-wrap" aria-label="Pixel office showing specialist agents">
-        <div class="office" id="office" aria-live="polite"></div>
+      <section class="workspace" aria-label="Pixel office workspace">
+        <section class="office-wrap" aria-label="Pixel office showing specialist agents">
+          <div class="office" id="office" aria-live="polite"></div>
+        </section>
+
+        <aside class="output-panel" id="outputPanel" aria-label="Forge output transcript" hidden>
+          <div class="output-header">
+            <div>
+              <p class="eyebrow">Forge Output</p>
+              <h2>Captured MCP Runs</h2>
+            </div>
+            <div class="output-actions">
+              <button type="button" id="clearOutputButton" class="secondary-button compact-button">Clear Output</button>
+              <button type="button" id="hideOutputButton" class="icon-button" aria-label="Hide Forge Output">Hide</button>
+            </div>
+          </div>
+          <div class="output-layout">
+            <div class="run-list" id="runList" aria-label="Captured Forge runs"></div>
+            <pre class="terminal" id="terminalOutput" aria-live="polite">No Forge output captured yet.</pre>
+          </div>
+        </aside>
       </section>
     </main>
 

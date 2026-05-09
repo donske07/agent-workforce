@@ -134,6 +134,24 @@ func NewHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
+	mux.HandleFunc("/forge-event", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "not found"})
+			return
+		}
+		var body Event
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
+			return
+		}
+		if err := validateForgeEvent(body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		broker.Broadcast(body)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.NotFound(w, r)
@@ -177,6 +195,40 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func validateForgeEvent(event Event) error {
+	eventType := eventString(event, "type")
+	if eventType != "forge_run_started" && eventType != "forge_output" && eventType != "forge_progress" && eventType != "forge_run_finished" {
+		return fmt.Errorf("unsupported forge event type: %s", eventType)
+	}
+	if eventString(event, "run_id") == "" {
+		return fmt.Errorf("run_id is required")
+	}
+	if eventString(event, "agent_id") == "" {
+		return fmt.Errorf("agent_id is required")
+	}
+	if eventType == "forge_output" {
+		stream := eventString(event, "stream")
+		if stream != "stdout" && stream != "stderr" {
+			return fmt.Errorf("stream must be stdout or stderr")
+		}
+		if _, ok := event["chunk"]; !ok {
+			return fmt.Errorf("chunk is required")
+		}
+	}
+	if eventType == "forge_progress" && eventString(event, "message") == "" {
+		return fmt.Errorf("message is required")
+	}
+	return nil
+}
+
+func eventString(event Event, key string) string {
+	value, ok := event[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func writeSSE(w http.ResponseWriter, event Event) {

@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-workforce/agent-workforce/internal/product"
@@ -32,20 +34,35 @@ type callParams struct {
 }
 
 const (
-	mcpChildDispatchEnv    = "AGENT_WORKFORCE_MCP_CHILD"
-	finalAnswerStartMarker = "AGENT_WORKFORCE_FINAL_START"
-	finalAnswerEndMarker   = "AGENT_WORKFORCE_FINAL_END"
-	maxFailureOutputChars  = 2000
+	mcpChildDispatchEnv     = "AGENT_WORKFORCE_MCP_CHILD"
+	finalAnswerStartMarker  = "AGENT_WORKFORCE_FINAL_START"
+	finalAnswerEndMarker    = "AGENT_WORKFORCE_FINAL_END"
+	maxFailureOutputChars   = 2000
+	maxForgeOutputChunkSize = 8000
+)
+
+const (
+	forgeRunStartedEvent  = "forge_run_started"
+	forgeOutputEvent      = "forge_output"
+	forgeProgressEvent    = "forge_progress"
+	forgeRunFinishedEvent = "forge_run_finished"
 )
 
 var (
-	ansiCSIRegexp = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]")
-	ansiOSCRegexp = regexp.MustCompile("\x1b\\][^\x07]*(\x07|\x1b\\\\)")
+	ansiCSIRegexp                = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]")
+	ansiOSCRegexp                = regexp.MustCompile("\x1b\\][^\x07]*(\x07|\x1b\\\\)")
+	forgeRunSerial               uint64
+	forgeLifecycleLineRegexp     = regexp.MustCompile(`^● \[[0-9]{2}:[0-9]{2}:[0-9]{2}\] (Initialize|Finished)\b`)
+	forgeProgressInterruptRegexp = regexp.MustCompile(`^\S+\s+.+?\s+[0-9]+(?::[0-9]+)?[smh]?\s+· Ctrl\+C to interrupt$`)
 )
 
 type officeNotifier func(agentID, state, title, officeURL string) bool
 
-type forgeRunner func(agent product.Agent, prompt string) forgeResult
+type officeEventPoster func(event map[string]any, officeURL string) bool
+
+type forgeOutputHandler func(stream, chunk string)
+
+type forgeRunner func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult
 
 type forgeResult struct {
 	Output   string
@@ -55,18 +72,20 @@ type forgeResult struct {
 }
 
 type serverState struct {
-	notifyOffice officeNotifier
-	runForge     forgeRunner
-	idleDelay    time.Duration
-	agent        *product.Agent
+	notifyOffice    officeNotifier
+	postOfficeEvent officeEventPoster
+	runForge        forgeRunner
+	idleDelay       time.Duration
+	agent           *product.Agent
 }
 
 func newServerState(agent *product.Agent) *serverState {
 	return &serverState{
-		notifyOffice: NotifyOffice,
-		runForge:     defaultForgeRunner,
-		idleDelay:    product.AgentIdleDelay,
-		agent:        agent,
+		notifyOffice:    NotifyOffice,
+		postOfficeEvent: PostOfficeEvent,
+		runForge:        defaultForgeRunner,
+		idleDelay:       product.AgentIdleDelay,
+		agent:           agent,
 	}
 }
 
@@ -79,12 +98,21 @@ var workforceAgentToolByName = func() map[string]product.Agent {
 }()
 
 func NotifyOffice(agentID, state, title, officeURL string) bool {
+	payload := map[string]string{"agent_id": agentID, "state": state, "title": title}
+	return postOfficeJSON(officeURL, "/agent-state", payload)
+}
+
+func PostOfficeEvent(event map[string]any, officeURL string) bool {
+	return postOfficeJSON(officeURL, "/forge-event", event)
+}
+
+func postOfficeJSON(officeURL, path string, payload any) bool {
 	if officeURL == "" {
 		officeURL = product.DefaultOfficeURL()
 	}
-	payload, _ := json.Marshal(map[string]string{"agent_id": agentID, "state": state, "title": title})
+	body, _ := json.Marshal(payload)
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post(stringsTrimRightSlash(officeURL)+"/agent-state", "application/json", bytes.NewReader(payload))
+	resp, err := client.Post(stringsTrimRightSlash(officeURL)+path, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
@@ -100,12 +128,20 @@ func (s *serverState) notify(agentID, state, title, officeURL string) bool {
 	return notify(agentID, state, title, officeURL)
 }
 
-func (s *serverState) run(agent product.Agent, prompt string) forgeResult {
+func (s *serverState) postForgeEvent(event map[string]any, officeURL string) bool {
+	post := s.postOfficeEvent
+	if post == nil {
+		post = PostOfficeEvent
+	}
+	return post(event, officeURL)
+}
+
+func (s *serverState) run(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 	run := s.runForge
 	if run == nil {
 		run = defaultForgeRunner
 	}
-	return run(agent, prompt)
+	return run(agent, prompt, onOutput)
 }
 
 func (s *serverState) notifyIdleAfterDelay(agentID, title, officeURL string) bool {
@@ -115,7 +151,7 @@ func (s *serverState) notifyIdleAfterDelay(agentID, title, officeURL string) boo
 	return s.notify(agentID, product.OfficeStateIdle, title, officeURL)
 }
 
-func defaultForgeRunner(agent product.Agent, prompt string) forgeResult {
+func defaultForgeRunner(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 	forgeBin, err := resolveForgeBin()
 	if err != nil {
 		return forgeResult{ExitCode: -1, Err: err}
@@ -127,10 +163,28 @@ func defaultForgeRunner(agent product.Agent, prompt string) forgeResult {
 	env = withEnv(env, "CLICOLOR", "0")
 	env = withEnv(env, "TERM", "dumb")
 	cmd.Env = env
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return forgeResult{ExitCode: -1, Err: err}
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return forgeResult{ExitCode: -1, Err: err}
+	}
+
+	if err := cmd.Start(); err != nil {
+		return forgeResult{ExitCode: -1, Err: err}
+	}
+
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go captureForgeStream(stdoutPipe, &stdout, "stdout", onOutput, &wg)
+	go captureForgeStream(stderrPipe, &stderr, "stderr", onOutput, &wg)
+	wg.Wait()
+
+	err = cmd.Wait()
 	exitCode := 0
 	if err != nil {
 		exitCode = -1
@@ -140,6 +194,24 @@ func defaultForgeRunner(agent product.Agent, prompt string) forgeResult {
 		}
 	}
 	return forgeResult{Output: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode, Err: err}
+}
+
+func captureForgeStream(reader io.Reader, buffer *bytes.Buffer, stream string, onOutput forgeOutputHandler, wg *sync.WaitGroup) {
+	defer wg.Done()
+	chunk := make([]byte, 4096)
+	for {
+		n, err := reader.Read(chunk)
+		if n > 0 {
+			text := string(chunk[:n])
+			_, _ = buffer.WriteString(text)
+			if onOutput != nil {
+				onOutput(stream, text)
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func resolveForgeBin() (string, error) {
@@ -273,12 +345,74 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 	prompt := buildForgePrompt(task, context, expectedOutput)
 	officeURL := os.Getenv("AGENT_WORKFORCE_OFFICE_URL")
 	notified := s.notify(agent.ID, product.OfficeStateThinking, agent.Title, officeURL)
-	result := s.run(agent, prompt)
+	runID := newForgeRunID(agent.ID)
+	s.postForgeEvent(map[string]any{
+		"type":            forgeRunStartedEvent,
+		"run_id":          runID,
+		"agent_id":        agent.ID,
+		"title":           agent.Title,
+		"sequence":        0,
+		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
+		"command":         fmt.Sprintf("forge --agent %s -p <prompt redacted>", agent.ID),
+		"prompt_redacted": true,
+	}, officeURL)
+	var sequence int64
+	var progressMu sync.Mutex
+	lastProgressMessage := ""
+	result := s.run(agent, prompt, func(stream, chunk string) {
+		for _, event := range classifyForgeStreamEvents(chunk, maxForgeOutputChunkSize) {
+			if event.Text == "" {
+				continue
+			}
+			seq := atomic.AddInt64(&sequence, 1)
+			if event.Kind == forgeStreamEventProgress {
+				progressMu.Lock()
+				isDuplicateProgress := event.Text == lastProgressMessage
+				if !isDuplicateProgress {
+					lastProgressMessage = event.Text
+				}
+				progressMu.Unlock()
+				if isDuplicateProgress {
+					continue
+				}
+				s.postForgeEvent(map[string]any{
+					"type":      forgeProgressEvent,
+					"run_id":    runID,
+					"agent_id":  agent.ID,
+					"title":     agent.Title,
+					"message":   event.Text,
+					"sequence":  seq,
+					"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+				}, officeURL)
+				continue
+			}
+			s.postForgeEvent(map[string]any{
+				"type":      forgeOutputEvent,
+				"run_id":    runID,
+				"agent_id":  agent.ID,
+				"title":     agent.Title,
+				"stream":    stream,
+				"sequence":  seq,
+				"chunk":     event.Text,
+				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			}, officeURL)
+		}
+	})
+	success := result.Err == nil && result.ExitCode == 0
+	s.postForgeEvent(map[string]any{
+		"type":      forgeRunFinishedEvent,
+		"run_id":    runID,
+		"agent_id":  agent.ID,
+		"title":     agent.Title,
+		"ok":        success,
+		"exit_code": result.ExitCode,
+		"sequence":  atomic.AddInt64(&sequence, 1),
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+	}, officeURL)
 	idleNotified := false
 	if notified {
 		idleNotified = s.notifyIdleAfterDelay(agent.ID, agent.Title, officeURL)
 	}
-	success := result.Err == nil && result.ExitCode == 0
 	cleanedOutput := cleanForgeText(result.Output)
 	output := extractFinalAnswer(cleanedOutput)
 	stderr := ""
@@ -304,6 +438,99 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 		return specialistSuccessResult(payload)
 	}
 	return textResult(payload)
+}
+
+func newForgeRunID(agentID string) string {
+	serial := atomic.AddUint64(&forgeRunSerial, 1)
+	cleanAgentID := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(agentID))
+	return fmt.Sprintf("%s-%d-%d", cleanAgentID, time.Now().UTC().UnixNano(), serial)
+}
+
+type forgeStreamEventKind string
+
+const (
+	forgeStreamEventOutput   forgeStreamEventKind = "output"
+	forgeStreamEventProgress forgeStreamEventKind = "progress"
+)
+
+type forgeStreamEvent struct {
+	Kind forgeStreamEventKind
+	Text string
+}
+
+func classifyForgeStreamEvents(value string, chunkLimit int) []forgeStreamEvent {
+	value = ansiOSCRegexp.ReplaceAllString(value, "")
+	value = ansiCSIRegexp.ReplaceAllString(value, "")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = removeControlChars(value)
+	if value == "" {
+		return nil
+	}
+
+	lines := strings.SplitAfter(value, "\n")
+	events := make([]forgeStreamEvent, 0, len(lines))
+	var output strings.Builder
+	flushOutput := func() {
+		text := output.String()
+		output.Reset()
+		for _, chunk := range chunkForgeOutputText(text, chunkLimit) {
+			events = append(events, forgeStreamEvent{Kind: forgeStreamEventOutput, Text: chunk})
+		}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			output.WriteString(line)
+			continue
+		}
+		if isFinalAnswerMarker(trimmed) || isForgeLifecycleLine(trimmed) {
+			flushOutput()
+			continue
+		}
+		if isForgeProgressLine(trimmed) {
+			flushOutput()
+			if message := normalizeForgeProgressMessage(trimmed); message != "" {
+				events = append(events, forgeStreamEvent{Kind: forgeStreamEventProgress, Text: message})
+			}
+			continue
+		}
+		output.WriteString(line)
+	}
+	flushOutput()
+	return events
+}
+
+func sanitizeForgeOutputChunks(value string, chunkLimit int) []string {
+	value = ansiOSCRegexp.ReplaceAllString(value, "")
+	value = ansiCSIRegexp.ReplaceAllString(value, "")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = removeControlChars(value)
+	return chunkForgeOutputText(value, chunkLimit)
+}
+
+func chunkForgeOutputText(value string, chunkLimit int) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	if chunkLimit <= 0 {
+		return []string{value}
+	}
+	runes := []rune(value)
+	chunks := make([]string, 0, (len(runes)/chunkLimit)+1)
+	for len(runes) > chunkLimit {
+		chunks = append(chunks, string(runes[:chunkLimit]))
+		runes = runes[chunkLimit:]
+	}
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
+	}
+	return chunks
 }
 
 func cleanForgeText(value string) string {
@@ -403,29 +630,53 @@ func removeControlChars(value string) string {
 	}, value)
 }
 
+func isFinalAnswerMarker(line string) bool {
+	return line == finalAnswerStartMarker || line == finalAnswerEndMarker
+}
+
+func isForgeLifecycleLine(line string) bool {
+	return forgeLifecycleLineRegexp.MatchString(line)
+}
+
 func isForgeProgressLine(line string) bool {
-	if strings.HasPrefix(line, "● [") {
-		return true
-	}
 	if strings.Contains(line, "· Ctrl+C to interrupt") {
-		return true
+		return startsWithSpinner(line) || forgeProgressInterruptRegexp.MatchString(line)
 	}
-	if strings.Contains(line, "Contemplating") && startsWithSpinner(line) {
-		return true
-	}
-	if strings.Contains(line, "Migrating credentials") && startsWithSpinner(line) {
+	if startsWithSpinner(line) && normalizedSpinnerStatus(line) != "" {
 		return true
 	}
 	return false
 }
 
-func startsWithSpinner(line string) bool {
+func normalizeForgeProgressMessage(line string) string {
+	line = normalizedSpinnerStatus(line)
+	if index := strings.Index(line, "· Ctrl+C to interrupt"); index >= 0 {
+		line = line[:index]
+	}
+	line = strings.Join(strings.Fields(line), " ")
+	return truncateText(line, 64)
+}
+
+func normalizedSpinnerStatus(line string) string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimSpace(strings.TrimPrefix(line, spinnerPrefix(line)))
+	if line == "" {
+		return ""
+	}
+	return line
+}
+
+func spinnerPrefix(line string) string {
 	for _, prefix := range []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"} {
 		if strings.HasPrefix(line, prefix) {
-			return true
+			return prefix
 		}
 	}
-	return false
+	return ""
+}
+
+func startsWithSpinner(line string) bool {
+	return spinnerPrefix(line) != ""
 }
 
 func specialistSuccessResult(payload map[string]any) map[string]any {

@@ -264,6 +264,7 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 		state   string
 		title   string
 	}
+	var postedEvents []map[string]any
 	var ranAgent product.Agent
 	var ranPrompt string
 	state := &serverState{
@@ -276,12 +277,20 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 			}{agentID: agentID, state: state, title: title})
 			return true
 		},
-		runForge: func(agent product.Agent, prompt string) forgeResult {
+		postOfficeEvent: func(event map[string]any, officeURL string) bool {
+			postedEvents = append(postedEvents, event)
+			return true
+		},
+		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 			ranAgent = agent
 			ranPrompt = prompt
 			if len(calls) != 1 || calls[0].state != product.OfficeStateThinking {
 				return forgeResult{ExitCode: 1, Err: errors.New("forge ran before thinking notification")}
 			}
+			onOutput("stdout", "\x1b[32mstreamed hello\x1b[0m")
+			onOutput("stderr", "\r\x1b[2Kwarning")
+			onOutput("stderr", "\r\x1b[2K⠋ Forging 2:01m · Ctrl+C to interrupt")
+			onOutput("stdout", finalAnswerStartMarker+"\nvisible final text\n"+finalAnswerEndMarker+"\n● [10:29:09] Finished abc\n")
 			return forgeResult{Output: "\x1b[36m●\x1b[0m [10:29:05] Initialize abc\n" + finalAnswerStartMarker + "\n\x1b[32mHello specialist\x1b[0m\n" + finalAnswerEndMarker + "\n● [10:29:09] Finished abc\n", Stderr: "\r\x1b[2K\x1b[32m⠋\x1b[0m \x1b[1;32mContemplating\x1b[0m \x1b[37m00s\x1b[0m \x1b[2;37m· Ctrl+C to interrupt\x1b[0m", ExitCode: 0}
 		},
 	}
@@ -330,13 +339,31 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("unexpected office calls: got %#v want %#v", calls, wantCalls)
 	}
+	if len(postedEvents) != 6 {
+		t.Fatalf("expected start, three output chunks, progress, and finish events, got %#v", postedEvents)
+	}
+	if postedEvents[0]["type"] != forgeRunStartedEvent || postedEvents[5]["type"] != forgeRunFinishedEvent {
+		t.Fatalf("unexpected forge lifecycle events: %#v", postedEvents)
+	}
+	if postedEvents[1]["type"] != forgeOutputEvent || postedEvents[1]["stream"] != "stdout" || postedEvents[1]["chunk"] != "streamed hello" {
+		t.Fatalf("unexpected stdout forge event: %#v", postedEvents[1])
+	}
+	if postedEvents[2]["type"] != forgeOutputEvent || postedEvents[2]["stream"] != "stderr" || postedEvents[2]["chunk"] != "\nwarning" {
+		t.Fatalf("unexpected stderr forge event: %#v", postedEvents[2])
+	}
+	if postedEvents[3]["type"] != forgeProgressEvent || postedEvents[3]["message"] != "Forging 2:01m" {
+		t.Fatalf("unexpected progress forge event: %#v", postedEvents[3])
+	}
+	if postedEvents[4]["type"] != forgeOutputEvent || postedEvents[4]["chunk"] != "visible final text\n" {
+		t.Fatalf("final markers or lifecycle lines leaked into transcript event: %#v", postedEvents[4])
+	}
 }
 
 func TestSpecialistToolCallReturnsFinalAnswerOnly(t *testing.T) {
 	state := &serverState{
 		idleDelay:    0,
 		notifyOffice: func(agentID, state, title, officeURL string) bool { return true },
-		runForge: func(agent product.Agent, prompt string) forgeResult {
+		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 			return forgeResult{Output: strings.Join([]string{
 				"󰄗 Inspect the repository structure and existing project files",
 				"Considering boilerplate application setup",
@@ -399,7 +426,7 @@ func TestSpecialistToolCallReturnsForgeFailure(t *testing.T) {
 	state := &serverState{
 		idleDelay:    0,
 		notifyOffice: func(agentID, state, title, officeURL string) bool { return true },
-		runForge: func(agent product.Agent, prompt string) forgeResult {
+		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 			return forgeResult{Output: "", Stderr: "bad things", ExitCode: 7, Err: errors.New("exit status 7")}
 		},
 	}
@@ -424,7 +451,7 @@ func TestSpecialistToolCallReturnsForgeFailure(t *testing.T) {
 }
 
 func TestSpecialistToolCallRejectsMissingTask(t *testing.T) {
-	state := &serverState{runForge: func(agent product.Agent, prompt string) forgeResult {
+	state := &serverState{runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 		t.Fatal("forge should not run without a task")
 		return forgeResult{}
 	}}
@@ -446,7 +473,7 @@ func TestScopedSpecialistToolCallRejectsOtherAgentTool(t *testing.T) {
 	}
 	state := &serverState{
 		agent: &frontend,
-		runForge: func(agent product.Agent, prompt string) forgeResult {
+		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 			t.Fatal("forge should not run for an out-of-scope tool")
 			return forgeResult{}
 		},
@@ -470,7 +497,7 @@ func TestFindSpecialistAgentRejectsCoordinator(t *testing.T) {
 
 func TestSpecialistToolCallRejectsNestedDispatch(t *testing.T) {
 	t.Setenv(mcpChildDispatchEnv, "1")
-	state := &serverState{runForge: func(agent product.Agent, prompt string) forgeResult {
+	state := &serverState{runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 		t.Fatal("forge should not run during nested dispatch")
 		return forgeResult{}
 	}}
@@ -482,6 +509,77 @@ func TestSpecialistToolCallRejectsNestedDispatch(t *testing.T) {
 	}
 	if !strings.Contains(payload["error"].(string), "nested") {
 		t.Fatalf("unexpected error: %#v", payload["error"])
+	}
+}
+
+func TestClassifyForgeStreamEventsSplitsProgressFromTranscript(t *testing.T) {
+	events := classifyForgeStreamEvents(strings.Join([]string{
+		"\x1b[32m⠏\x1b[0m Forging 2:01m · Ctrl+C to interrupt",
+		finalAnswerStartMarker,
+		"## Implementation Summary",
+		"",
+		"Created the app.",
+		finalAnswerEndMarker,
+		"● [15:04:17] Finished abc",
+		"real stderr warning",
+	}, "\n"), maxForgeOutputChunkSize)
+
+	if len(events) != 3 {
+		t.Fatalf("unexpected event count: %#v", events)
+	}
+	if events[0].Kind != forgeStreamEventProgress || events[0].Text != "Forging 2:01m" {
+		t.Fatalf("unexpected progress event: %#v", events[0])
+	}
+	if events[1].Kind != forgeStreamEventOutput || events[1].Text != "## Implementation Summary\n\nCreated the app.\n" {
+		t.Fatalf("unexpected summary output event: %#v", events[1])
+	}
+	if events[2].Kind != forgeStreamEventOutput || events[2].Text != "real stderr warning" {
+		t.Fatalf("unexpected warning output event: %#v", events[2])
+	}
+}
+
+func TestClassifyForgeStreamEventsHandlesResearchingProgressAndNonLifecycleBullets(t *testing.T) {
+	events := classifyForgeStreamEvents(strings.Join([]string{
+		"\x1b[32m⠋\x1b[0m Migrating credentials 00s · Ctrl+C to interrupt",
+		"● [15:15:59] Initialize ce55f2e8-3023-4612-8de1-cc17769dc712",
+		"⠹ Researching 03s · Ctrl+C to interrupt",
+		"● [15:16:07] Execute [/bin/zsh] ls -la",
+		"total 0",
+		"⠇ Researching 16s · Ctrl+C to interrupt",
+		"● [15:16:15] Update Todos 4 item(s)",
+		"  󰄗 Scaffold a non-destructive Vue 3 + Vite JavaScript app in vue-app",
+	}, "\n"), maxForgeOutputChunkSize)
+
+	if len(events) != 5 {
+		t.Fatalf("unexpected event count: %#v", events)
+	}
+	want := []forgeStreamEvent{
+		{Kind: forgeStreamEventProgress, Text: "Migrating credentials 00s"},
+		{Kind: forgeStreamEventProgress, Text: "Researching 03s"},
+		{Kind: forgeStreamEventOutput, Text: "● [15:16:07] Execute [/bin/zsh] ls -la\ntotal 0\n"},
+		{Kind: forgeStreamEventProgress, Text: "Researching 16s"},
+		{Kind: forgeStreamEventOutput, Text: "● [15:16:15] Update Todos 4 item(s)\n  󰄗 Scaffold a non-destructive Vue 3 + Vite JavaScript app in vue-app"},
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("unexpected events:\ngot  %#v\nwant %#v", events, want)
+	}
+}
+
+func TestNormalizeForgeProgressMessageSupportsGenericSpinnerStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want string
+	}{
+		{line: "⠙ Researching 24s · Ctrl+C to interrupt", want: "Researching 24s"},
+		{line: "⠋ Migrating credentials 00s · Ctrl+C to interrupt", want: "Migrating credentials 00s"},
+		{line: "⠼ Building project 01m · Ctrl+C to interrupt", want: "Building project 01m"},
+	} {
+		if !isForgeProgressLine(tc.line) {
+			t.Fatalf("expected progress line: %q", tc.line)
+		}
+		if got := normalizeForgeProgressMessage(tc.line); got != tc.want {
+			t.Fatalf("unexpected normalized progress: got %q want %q", got, tc.want)
+		}
 	}
 }
 
@@ -513,7 +611,7 @@ PY
 	t.Setenv("AGENT_WORKFORCE_FORGE_BIN", forgePath)
 	t.Setenv("FORGE_LOG", logPath)
 
-	result := defaultForgeRunner(product.Agent{ID: "qa-programmer"}, "Task:\nwrite tests")
+	result := defaultForgeRunner(product.Agent{ID: "qa-programmer"}, "Task:\nwrite tests", nil)
 	if result.Err != nil {
 		t.Fatalf("unexpected forge error: %v stderr=%s", result.Err, result.Stderr)
 	}
@@ -596,7 +694,7 @@ func TestNotifyToolRemainsNotificationOnly(t *testing.T) {
 			}
 			return true
 		},
-		runForge: func(agent product.Agent, prompt string) forgeResult {
+		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
 			t.Fatal("notify tool should not run forge")
 			return forgeResult{}
 		},
