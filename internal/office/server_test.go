@@ -139,9 +139,17 @@ func TestFrontendDefaultsMonitorAndOutputCollapsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(data)
-	for _, want := range []string{"is-monitor-collapsed", "is-output-collapsed", "id=\"monitorPanel\"", "id=\"outputPanel\"", "hidden"} {
+	for _, want := range []string{"is-monitor-collapsed", "is-output-collapsed", "id=\"monitorPanel\"", "id=\"outputPanel\"", "hidden", "id=\"latestOutputButton\"", "Go to latest", "id=\"officeStatus\""} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("frontend default HTML missing %q", want)
 		}
+	}
+	for _, removed := range []string{"Forge Agent Office", "Forge MCP Monitor", "Default Forge", "Forge Output", "No Forge output captured yet", "Captured Forge runs", "forgeStatus", "forge-console"} {
+		if strings.Contains(body, removed) {
+			t.Fatalf("frontend default HTML still contains removed label %q", removed)
+		}
+	}
+	if strings.Contains(strings.ToLower(body), "forge") {
+		t.Fatalf("frontend default HTML should not contain forge branding: %s", body)
 	}
 }

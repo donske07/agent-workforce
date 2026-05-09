@@ -111,7 +111,7 @@ h1 {
   line-height: 1.55;
 }
 
-.forge-console {
+.office-console {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 0.85rem;
@@ -140,7 +140,7 @@ h1 {
   font-weight: 800;
 }
 
-#forgeStatus {
+#officeStatus {
   margin: 0;
   color: var(--muted);
   line-height: 1.4;
@@ -202,6 +202,14 @@ h1 {
   min-height: 2.25rem;
   padding: 0.35rem 0.65rem;
   font-size: 0.75rem;
+}
+
+.latest-button {
+  background: var(--accent-2);
+}
+
+.latest-button[hidden] {
+  display: none;
 }
 
 .agent-button {

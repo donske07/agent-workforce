@@ -9,7 +9,7 @@ const appShell = document.querySelector("#appShell");
 const office = document.querySelector("#office");
 const agentButtons = document.querySelector("#agentButtons");
 const template = document.querySelector("#agentTemplate");
-const forgeStatus = document.querySelector("#forgeStatus");
+const officeStatus = document.querySelector("#officeStatus");
 const clearButton = document.querySelector("#clearButton");
 const demoButton = document.querySelector("#demoButton");
 const connectionLight = document.querySelector("#connectionLight");
@@ -22,16 +22,22 @@ const hideMonitorButton = document.querySelector("#hideMonitorButton");
 const hideOutputButton = document.querySelector("#hideOutputButton");
 const focusButton = document.querySelector("#focusButton");
 const clearOutputButton = document.querySelector("#clearOutputButton");
+const latestOutputButton = document.querySelector("#latestOutputButton");
 const runList = document.querySelector("#runList");
 const terminalOutput = document.querySelector("#terminalOutput");
+const latestScrollThreshold = 24;
+const promptRedaction = "<prompt redacted>";
 const thinkingAgents = new Set();
 const bubbleMessages = new Map();
-const forgeRuns = new Map();
+const runRecords = new Map();
 let activeRunId = "";
 let unreadOutputCount = 0;
 let runningOutputCount = 0;
 let monitorCollapsed = true;
 let outputCollapsed = true;
+let latestRunId = "";
+let terminalFollowingLatest = true;
+let forceActiveRunScroll = false;
 let demoTimer = null;
 
 function renderAgents() {
@@ -73,12 +79,12 @@ function setAgentThinking(agentId, isThinking, message = "") {
 
   if (isThinking) {
     thinkingAgents.add(agentId);
-    forgeStatus.textContent = message || `Default Forge called ${agent.name}.`;
+    officeStatus.textContent = message || `Coordinator called ${agent.name}.`;
     return;
   }
 
   thinkingAgents.delete(agentId);
-  forgeStatus.textContent = thinkingAgents.size > 0
+  officeStatus.textContent = thinkingAgents.size > 0
     ? `${thinkingAgents.size} expert agent${thinkingAgents.size === 1 ? " is" : "s are"} still thinking.`
     : "Ready for the next MCP agent call.";
 }
@@ -98,6 +104,15 @@ function setOutputCollapsed(value) {
   outputToggle.setAttribute("aria-expanded", String(!value));
   if (!value) {
     unreadOutputCount = 0;
+    window.requestAnimationFrame(() => {
+      if (terminalFollowingLatest) {
+        scrollTerminalToLatest(true);
+      } else {
+        updateLatestButton();
+      }
+    });
+  } else {
+    updateLatestButton();
   }
   updateOutputBadge();
 }
@@ -116,9 +131,44 @@ function updateOutputBadge() {
     parts.push(String(unreadOutputCount));
   }
   if (parts.length === 0) {
-    parts.push(String(forgeRuns.size));
+    parts.push(String(runRecords.size));
   }
   outputToggle.textContent = `${outputCollapsed ? "Show" : "Hide"} Output • ${parts.join(" • ")}`;
+}
+
+function isViewingLatestRun() {
+  return !latestRunId || activeRunId === latestRunId;
+}
+
+function isTerminalAtLatest() {
+  if (terminalOutput.scrollHeight <= terminalOutput.clientHeight) {
+    return true;
+  }
+
+  return terminalOutput.scrollHeight - terminalOutput.scrollTop - terminalOutput.clientHeight <= latestScrollThreshold;
+}
+
+function updateLatestButton() {
+  const hasActiveRun = Boolean(runRecords.get(activeRunId));
+  const hasScrollableOutput = terminalOutput.scrollHeight > terminalOutput.clientHeight + latestScrollThreshold;
+  const shouldShow = !outputCollapsed && hasActiveRun && (!isViewingLatestRun() || (hasScrollableOutput && !isTerminalAtLatest()));
+  latestOutputButton.hidden = !shouldShow;
+  latestOutputButton.setAttribute("aria-hidden", String(!shouldShow));
+}
+
+function scrollTerminalToLatest(enableFollowing = true) {
+  terminalOutput.scrollTop = terminalOutput.scrollHeight;
+  terminalFollowingLatest = enableFollowing && isViewingLatestRun();
+  updateLatestButton();
+}
+
+function goToLatestOutput() {
+  if (latestRunId) {
+    activeRunId = latestRunId;
+  }
+  terminalFollowingLatest = true;
+  forceActiveRunScroll = true;
+  renderOutput();
 }
 
 function previewThinking(agentId, duration = 3200) {
@@ -133,7 +183,7 @@ function clearThinking() {
     card.classList.remove("is-thinking");
     card.querySelector("[data-bubble-text]").textContent = "Thinking...";
   });
-  forgeStatus.textContent = "Ready for the next MCP agent call.";
+  officeStatus.textContent = "Ready for the next MCP agent call.";
 
   if (demoTimer) {
     window.clearInterval(demoTimer);
@@ -149,7 +199,7 @@ function runDemo() {
   }
 
   if (agents.length === 0) {
-    forgeStatus.textContent = "No agents are available for the delegation demo.";
+    officeStatus.textContent = "No agents are available for the delegation demo.";
     return;
   }
 
@@ -171,18 +221,59 @@ function runDemo() {
   }, 900);
 }
 
+function commandAgentId(command) {
+  const match = String(command || "").match(/(?:^|\s)--agent(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/);
+  return match ? (match[1] || match[2] || match[3] || "") : "";
+}
+
+function redactedAgentCommand(agentId = "") {
+  return `forge --agent ${agentId || "<agent>"} -p ${promptRedaction}`;
+}
+
+function redactCommandPrompt(command, agentId = "") {
+  const text = String(command || "").trim();
+  const displayAgentId = agentId || commandAgentId(text) || "<agent>";
+
+  if (!text) {
+    return redactedAgentCommand(displayAgentId);
+  }
+
+  if (text.includes(promptRedaction)) {
+    return text;
+  }
+
+  const isAgentCommand = /(?:^|\s)(?:\S*\/)?forge(?:\s|$)/.test(text);
+  const hasPromptFlag = /(?:^|\s)(?:-p|--prompt)(?:=|\s+)/.test(text);
+  if (isAgentCommand && hasPromptFlag) {
+    return redactedAgentCommand(displayAgentId);
+  }
+
+  return text
+    .replace(/(\s(?:-p|--prompt)=)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/, `$1${promptRedaction}`)
+    .replace(/(\s(?:-p|--prompt)\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/, `$1${promptRedaction}`);
+}
+
+function activateRunForEvent(runId) {
+  latestRunId = runId;
+  if (!activeRunId || terminalFollowingLatest || activeRunId === runId) {
+    activeRunId = runId;
+  }
+  terminalFollowingLatest = activeRunId === runId && isTerminalAtLatest();
+}
+
 function ensureRun(event) {
   const runId = String(event.run_id || "");
   if (!runId) {
     return null;
   }
 
-  if (!forgeRuns.has(runId)) {
-    forgeRuns.set(runId, {
+  if (!runRecords.has(runId)) {
+    const agentId = event.agent_id || "unknown-agent";
+    runRecords.set(runId, {
       id: runId,
-      agentId: event.agent_id || "unknown-agent",
-      title: event.title || event.agent_id || "Forge Agent",
-      command: event.command || "forge --agent <agent> -p <prompt redacted>",
+      agentId,
+      title: event.title || agentId || "Agent Run",
+      command: redactCommandPrompt(event.command, agentId),
       status: "running",
       ok: null,
       exitCode: null,
@@ -196,7 +287,7 @@ function ensureRun(event) {
     activeRunId = runId;
   }
 
-  return forgeRuns.get(runId);
+  return runRecords.get(runId);
 }
 
 function handleRunStarted(event) {
@@ -206,10 +297,10 @@ function handleRunStarted(event) {
   }
 
   run.status = "running";
-  run.command = event.command || run.command;
+  run.command = redactCommandPrompt(event.command || run.command, run.agentId);
   run.startedAt = event.timestamp || run.startedAt;
   runningOutputCount += 1;
-  activeRunId = run.id;
+  activateRunForEvent(run.id);
   markOutputActivity();
   renderOutput();
 }
@@ -225,7 +316,7 @@ function handleRunOutput(event) {
     sequence: Number(event.sequence || 0),
     text: String(event.chunk || "")
   });
-  activeRunId = run.id;
+  activateRunForEvent(run.id);
   markOutputActivity();
   renderOutput();
 }
@@ -252,7 +343,7 @@ function handleRunFinished(event) {
   run.exitCode = Number(event.exit_code ?? 0);
   run.finishedAt = event.timestamp || new Date().toISOString();
   runningOutputCount = Math.max(0, runningOutputCount - 1);
-  activeRunId = run.id;
+  activateRunForEvent(run.id);
   bubbleMessages.delete(run.agentId);
   setAgentThinking(run.agentId, false);
   markOutputActivity();
@@ -274,7 +365,7 @@ function renderOutput() {
 
 function renderRunList() {
   runList.textContent = "";
-  const runs = Array.from(forgeRuns.values()).reverse();
+  const runs = Array.from(runRecords.values()).reverse();
 
   if (runs.length === 0) {
     const empty = document.createElement("p");
@@ -292,6 +383,8 @@ function renderRunList() {
     button.innerHTML = `<strong>${escapeHTML(run.title)}</strong><span>${escapeHTML(run.status)}</span>`;
     button.addEventListener("click", () => {
       activeRunId = run.id;
+      terminalFollowingLatest = isViewingLatestRun();
+      forceActiveRunScroll = true;
       renderOutput();
     });
     runList.appendChild(button);
@@ -299,12 +392,18 @@ function renderRunList() {
 }
 
 function renderActiveRun() {
-  const run = forgeRuns.get(activeRunId);
+  const run = runRecords.get(activeRunId);
 
   if (!run) {
-    terminalOutput.textContent = "No Forge output captured yet.";
+    terminalOutput.textContent = "No output captured yet.";
+    terminalFollowingLatest = true;
+    updateLatestButton();
     return;
   }
+
+  const shouldFollowLatest = forceActiveRunScroll || (isViewingLatestRun() && (terminalFollowingLatest || isTerminalAtLatest()));
+  const previousScrollTop = terminalOutput.scrollTop;
+  forceActiveRunScroll = false;
 
   const sortedChunks = [...run.chunks].sort((left, right) => left.sequence - right.sequence);
   const transcript = sortedChunks.map((chunk) => {
@@ -316,18 +415,26 @@ function renderActiveRun() {
     `${run.title} · ${run.status}`,
     run.command,
     "",
-    transcript || "Waiting for output...",
-    "",
-    run.status === "running" ? "Status: running" : `Status: ${run.status} · exit code ${run.exitCode}`
+    transcript || "Waiting for output..."
   ].join("\n");
-  terminalOutput.scrollTop = terminalOutput.scrollHeight;
+
+  if (shouldFollowLatest) {
+    scrollTerminalToLatest(isViewingLatestRun());
+  } else {
+    terminalOutput.scrollTop = previousScrollTop;
+    terminalFollowingLatest = false;
+    updateLatestButton();
+  }
 }
 
 function clearOutput() {
-  forgeRuns.clear();
+  runRecords.clear();
   activeRunId = "";
   unreadOutputCount = 0;
   runningOutputCount = 0;
+  latestRunId = "";
+  terminalFollowingLatest = true;
+  forceActiveRunScroll = false;
   renderOutput();
 }
 
@@ -410,12 +517,18 @@ hideMonitorButton.addEventListener("click", () => setMonitorCollapsed(true));
 hideOutputButton.addEventListener("click", () => setOutputCollapsed(true));
 focusButton.addEventListener("click", focusPixels);
 clearOutputButton.addEventListener("click", clearOutput);
+latestOutputButton.addEventListener("click", goToLatestOutput);
+terminalOutput.addEventListener("scroll", () => {
+  terminalFollowingLatest = isViewingLatestRun() && isTerminalAtLatest();
+  updateLatestButton();
+});
 
-window.forgeOffice = {
+window.pixelOffice = {
   setAgentThinking,
   previewThinking,
   clear: clearThinking,
   clearOutput,
+  goToLatestOutput,
   focusPixels,
   agents
 };

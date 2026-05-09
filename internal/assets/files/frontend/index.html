@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Forge Agent Office</title>
+    <title>Pixel Agent Office</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -23,23 +23,23 @@
       <section class="control-panel" id="monitorPanel" aria-labelledby="app-title" hidden>
         <div class="panel-header">
           <div>
-            <p class="eyebrow">Forge MCP Monitor</p>
+            <p class="eyebrow">Agent Monitor</p>
             <h1 id="app-title">Pixel Agent Office</h1>
           </div>
-          <button type="button" id="hideMonitorButton" class="icon-button" aria-label="Hide Forge MCP Monitor">
+          <button type="button" id="hideMonitorButton" class="icon-button" aria-label="Hide Agent Monitor">
             Hide
           </button>
         </div>
         <p class="intro">
-          Keep this page open while Forge works. MCP agent calls will turn on
+          Keep this page open while agents work. MCP agent calls will turn on
           the matching thinking bubble, then turn it off when the call ends.
         </p>
 
-        <div class="forge-console" aria-live="polite">
-          <div class="console-avatar" aria-hidden="true">F</div>
+        <div class="office-console" aria-live="polite">
+          <div class="console-avatar" aria-hidden="true">A</div>
           <div>
-            <p class="console-label">Default Forge</p>
-            <p id="forgeStatus">Connected to the office event stream.</p>
+            <p class="console-label">Coordinator</p>
+            <p id="officeStatus">Connected to the office event stream.</p>
           </div>
         </div>
 
@@ -65,20 +65,21 @@
           <div class="office" id="office" aria-live="polite"></div>
         </section>
 
-        <aside class="output-panel" id="outputPanel" aria-label="Forge output transcript" hidden>
+        <aside class="output-panel" id="outputPanel" aria-label="Output transcript" hidden>
           <div class="output-header">
             <div>
-              <p class="eyebrow">Forge Output</p>
+              <p class="eyebrow">Output</p>
               <h2>Captured MCP Runs</h2>
             </div>
             <div class="output-actions">
+              <button type="button" id="latestOutputButton" class="secondary-button compact-button latest-button" hidden>Go to latest</button>
               <button type="button" id="clearOutputButton" class="secondary-button compact-button">Clear Output</button>
-              <button type="button" id="hideOutputButton" class="icon-button" aria-label="Hide Forge Output">Hide</button>
+              <button type="button" id="hideOutputButton" class="icon-button" aria-label="Hide Output">Hide</button>
             </div>
           </div>
           <div class="output-layout">
-            <div class="run-list" id="runList" aria-label="Captured Forge runs"></div>
-            <pre class="terminal" id="terminalOutput" aria-live="polite">No Forge output captured yet.</pre>
+            <div class="run-list" id="runList" aria-label="Captured runs"></div>
+            <pre class="terminal" id="terminalOutput" aria-live="polite">No output captured yet.</pre>
           </div>
         </aside>
       </section>
