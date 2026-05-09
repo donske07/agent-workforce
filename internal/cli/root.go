@@ -52,6 +52,24 @@ var legacyAgents = []string{
 var bundledSkills = []string{"delegate-to-workforce-experts"}
 var legacySkills = []string{"delegate-to-moderation-experts"}
 var agentIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
+var supportedAgentTools = map[string]bool{
+	"read":              true,
+	"write":             true,
+	"fs_search":         true,
+	"sem_search":        true,
+	"remove":            true,
+	"patch":             true,
+	"multi_patch":       true,
+	"undo":              true,
+	"shell":             true,
+	"fetch":             true,
+	"followup":          true,
+	"skill":             true,
+	"plan":              true,
+	"todo_write":        true,
+	"todo_read":         true,
+	"agent_workforce_*": true,
+}
 
 type CommonOptions struct {
 	Yes                 bool
@@ -62,10 +80,8 @@ type CommonOptions struct {
 	SkipMCPRemove       bool
 	DryRun              bool
 	JSON                bool
-	Force               bool
 	RemoveState         bool
 	OfficeURL           string
-	MCPName             string
 }
 
 type Manifest struct {
@@ -99,7 +115,7 @@ type AgentInfo struct {
 }
 
 func Execute() error {
-	opts := &CommonOptions{OfficeURL: product.DefaultOfficeURL(), MCPName: PackageName}
+	opts := &CommonOptions{OfficeURL: product.DefaultOfficeURL()}
 	root := &cobra.Command{
 		Use:   "agent-workforce",
 		Short: "Install and operate a global Agent Workforce for ForgeCode.",
@@ -148,18 +164,38 @@ This command is safe by default and only writes Agent Workforce-owned assets.`),
 		Example: fmt.Sprintf("agent-workforce %s --yes\nagent-workforce %s --yes --skip-mcp-import --forge-config \"$HOME/forge\"", use, use),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !local.Yes && !local.JSON {
-				if !confirm("Continue with Agent Workforce "+use+"?", true) {
+				ok, err := confirm("Continue with Agent Workforce "+use+"?", true)
+				if err != nil {
+					return err
+				}
+				if !ok {
 					return nil
 				}
+			}
+			if !local.SkipForgeValidation {
+				forgeBin, err := resolveForgeBin(local.ForgeBin)
+				if err != nil {
+					return fmt.Errorf("forge binary validation failed: %w", err)
+				}
+				local.ForgeBin = forgeBin
 			}
 			manifest, err := installAssets(local)
 			if err != nil {
 				return err
 			}
 			if local.JSON {
-				return printJSON(map[string]any{"ok": true, "manifest": manifest})
+				return printJSON(map[string]any{"ok": true, "dryRun": local.DryRun, "manifest": manifest})
 			}
-			fmt.Println("Agent Workforce installed successfully.")
+			if local.DryRun {
+				fmt.Printf("Agent Workforce %s dry run complete. No files were written.\n", use)
+				fmt.Println("Forge config:", forgeConfigDir(local.ForgeConfig))
+				return nil
+			}
+			status := "installed"
+			if update {
+				status = "updated"
+			}
+			fmt.Printf("Agent Workforce %s successfully.\n", status)
 			fmt.Println("Forge config:", forgeConfigDir(local.ForgeConfig))
 			fmt.Println("Next: agent-workforce doctor && agent-workforce office")
 			return nil
@@ -177,7 +213,6 @@ func addInstallFlags(cmd *cobra.Command, opts *CommonOptions) {
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Preview actions without writing files.")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Print machine-readable JSON output.")
 	cmd.Flags().StringVar(&opts.OfficeURL, "office-url", product.DefaultOfficeURL(), "Pixel office URL used in generated MCP config.")
-	cmd.Flags().StringVar(&opts.MCPName, "mcp-name", PackageName, "Deprecated: generated MCP servers use agent-workforce-mcp-<agent-id> names.")
 }
 
 func uninstallCommand(opts *CommonOptions) *cobra.Command {
@@ -196,8 +231,14 @@ agent-workforce uninstall --yes --remove-state`),
 				}
 				return errors.New("not installed: manifest missing")
 			}
-			if !local.Yes && !local.JSON && !confirm("Uninstall Agent Workforce package-owned files?", false) {
-				return nil
+			if !local.Yes && !local.JSON {
+				ok, err := confirm("Uninstall Agent Workforce package-owned files?", false)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return nil
+				}
 			}
 			removed := []string{}
 			errs := []string{}
@@ -464,7 +505,6 @@ func agentsActivateCommand(opts *CommonOptions, activate bool) *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Print JSON output.")
-	cmd.Flags().BoolVar(&opts.Force, "force", false, "Skip prompts.")
 	return cmd
 }
 
@@ -473,6 +513,15 @@ func agentsDeleteCommand(opts *CommonOptions) *cobra.Command {
 		id := args[0]
 		if isBundled(id) {
 			return fmt.Errorf("bundled agents cannot be deleted: %s. Use 'agents manage' or 'agents deactivate' instead", id)
+		}
+		if !opts.Yes && !opts.JSON {
+			ok, err := confirm("Delete custom agent "+id+"?", false)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
 		}
 		removed := []string{}
 		paths := []string{customAgentPath(id), filepath.Join(agentDir(forgeConfigDir(opts.ForgeConfig)), id+".md"), filepath.Join(disabledAgentDir(agentDir(forgeConfigDir(opts.ForgeConfig))), id+".md")}
@@ -515,7 +564,7 @@ func agentsAddCommand(opts *CommonOptions) *cobra.Command {
 			return err
 		}
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			content := fmt.Sprintf("---\nid: %s\ntitle: %s\ndescription: Custom workforce agent.\ntools:\n  - read\n  - search\n---\n\n# %s\n\nDescribe this agent's responsibilities here.\n", id, titleFromID(id), titleFromID(id))
+			content := fmt.Sprintf("---\nid: %s\ntitle: %s\ndescription: Custom workforce agent for targeted project assistance.\ntools:\n  - read\n  - fs_search\n  - sem_search\n---\n\n# %s\n\nYou are a custom Agent Workforce specialist. Help with targeted project analysis and implementation tasks within the scope the user provides. Verify codebase facts before making claims, keep responses concise, and summarize changed files and validation when work is completed.\n", id, titleFromID(id), titleFromID(id))
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return err
 			}
@@ -593,6 +642,7 @@ func validateAgentFile(expectedID, path string) []string {
 		return []string{fmt.Sprintf("%s: %v", path, err)}
 	}
 	fields := parseFrontmatter(string(data))
+	tools := parseFrontmatterList(string(data), "tools")
 	errs := []string{}
 	id := fields["id"]
 	if id == "" {
@@ -605,6 +655,14 @@ func validateAgentFile(expectedID, path string) []string {
 	}
 	if fields["description"] == "" {
 		errs = append(errs, path+": missing description")
+	}
+	if len(tools) == 0 {
+		errs = append(errs, path+": missing tools")
+	}
+	for _, tool := range tools {
+		if !isSupportedAgentTool(tool) {
+			errs = append(errs, fmt.Sprintf("%s: unsupported tool %q", path, tool))
+		}
 	}
 	return errs
 }
@@ -624,4 +682,49 @@ func parseFrontmatter(content string) map[string]string {
 		}
 	}
 	return fields
+}
+
+func parseFrontmatterList(content, key string) []string {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return nil
+	}
+	items := []string{}
+	inList := false
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			break
+		}
+		if inList {
+			if strings.HasPrefix(line, "  - ") {
+				item := strings.TrimSpace(strings.TrimPrefix(line, "  - "))
+				if item != "" {
+					items = append(items, item)
+				}
+				continue
+			}
+			if trimmed == "" {
+				continue
+			}
+			if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+				inList = false
+			}
+		}
+		if trimmed == key+":" {
+			inList = true
+		}
+	}
+	return items
+}
+
+func isSupportedAgentTool(tool string) bool {
+	tool = strings.TrimSpace(tool)
+	if supportedAgentTools[tool] {
+		return true
+	}
+	if strings.HasPrefix(tool, "agent_workforce_") {
+		return true
+	}
+	return strings.HasPrefix(tool, "mcp_agent_workforce_") && strings.Contains(tool, "_tool_agent_workforce_")
 }

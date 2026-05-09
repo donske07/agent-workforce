@@ -159,7 +159,7 @@ func TestLoadAgentStateSupportsLegacySchema(t *testing.T) {
 
 func TestWriteAndRemoveMCPConfig(t *testing.T) {
 	home := useTempHome(t)
-	opts := CommonOptions{MCPName: "custom-workforce", OfficeURL: "http://127.0.0.1:9999"}
+	opts := CommonOptions{OfficeURL: "http://127.0.0.1:9999", ForgeBin: "/custom/forge"}
 
 	path, err := writeMCPConfig(opts)
 	if err != nil {
@@ -181,9 +181,6 @@ func TestWriteAndRemoveMCPConfig(t *testing.T) {
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		t.Fatal(err)
-	}
-	if _, ok := payload.MCPServers[opts.MCPName]; ok {
-		t.Fatalf("deprecated custom MCP name should not be used as a shared server entry: %s", opts.MCPName)
 	}
 	if _, ok := payload.MCPServers[product.AgentMCPServerName(product.CoordinatorAgentID)]; ok {
 		t.Fatalf("coordinator must not be generated as a specialist MCP server")
@@ -209,6 +206,9 @@ func TestWriteAndRemoveMCPConfig(t *testing.T) {
 		}
 		if server.Env["AGENT_WORKFORCE_OFFICE_URL"] != opts.OfficeURL {
 			t.Fatalf("unexpected office URL for %s: got %s want %s", name, server.Env["AGENT_WORKFORCE_OFFICE_URL"], opts.OfficeURL)
+		}
+		if server.Env["AGENT_WORKFORCE_FORGE_BIN"] != opts.ForgeBin {
+			t.Fatalf("unexpected forge binary for %s: got %s want %s", name, server.Env["AGENT_WORKFORCE_FORGE_BIN"], opts.ForgeBin)
 		}
 	}
 	if err := removeMCPConfig(); err != nil {

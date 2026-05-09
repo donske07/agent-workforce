@@ -7,7 +7,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
 	"sync"
 
@@ -157,21 +157,23 @@ func NewHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/")
-		if path == "" {
-			path = "index.html"
+		assetPath := strings.TrimPrefix(r.URL.Path, "/")
+		if assetPath == "" {
+			assetPath = "index.html"
 		}
-		path = filepath.Clean(path)
-		if strings.HasPrefix(path, "..") || strings.Contains(path, string(filepath.Separator)+".."+string(filepath.Separator)) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
+		for _, segment := range strings.Split(assetPath, "/") {
+			if segment == ".." {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
 		}
-		data, err := fs.ReadFile(frontend, path)
+		assetPath = strings.TrimPrefix(path.Clean("/"+assetPath), "/")
+		data, err := fs.ReadFile(frontend, assetPath)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		if ctype := mime.TypeByExtension(filepath.Ext(path)); ctype != "" {
+		if ctype := mime.TypeByExtension(path.Ext(assetPath)); ctype != "" {
 			w.Header().Set("Content-Type", ctype)
 		}
 		_, _ = w.Write(data)

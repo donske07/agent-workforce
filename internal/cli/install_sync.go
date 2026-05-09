@@ -205,7 +205,11 @@ func inventory(config string) ([]AgentInfo, error) {
 			active = true
 		}
 		path := bundledAgentPath(config, id, active)
-		infos = append(infos, AgentInfo{ID: id, Source: "bundled", Active: active, Deletable: false, Path: path, Title: titleFromID(id)})
+		title := titleFromID(id)
+		if agent, ok := product.AgentByID(id); ok {
+			title = agent.Title
+		}
+		infos = append(infos, AgentInfo{ID: id, Source: "bundled", Active: active, Deletable: false, Path: path, Title: title})
 	}
 	customs, err := filepath.Glob(filepath.Join(customAgentsDir(), "*.md"))
 	if err != nil {
@@ -221,9 +225,19 @@ func inventory(config string) ([]AgentInfo, error) {
 		if !ok {
 			active = true
 		}
-		infos = append(infos, AgentInfo{ID: id, Source: "custom", Active: active, Deletable: true, Path: path, Title: titleFromID(id)})
+		infos = append(infos, AgentInfo{ID: id, Source: "custom", Active: active, Deletable: true, Path: path, Title: agentTitle(path, id)})
 	}
 	return infos, nil
+}
+
+func agentTitle(path, id string) string {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if title := parseFrontmatter(string(data))["title"]; title != "" {
+			return title
+		}
+	}
+	return titleFromID(id)
 }
 
 func bundledAgentContent(id string) ([]byte, error) {

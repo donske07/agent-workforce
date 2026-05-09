@@ -148,6 +148,11 @@ function runDemo() {
     return;
   }
 
+  if (agents.length === 0) {
+    forgeStatus.textContent = "No agents are available for the delegation demo.";
+    return;
+  }
+
   let index = 0;
   demoButton.textContent = "Stop demo";
   previewThinking(agents[index].id, 2600);
@@ -353,7 +358,14 @@ function connectEventStream() {
   });
 
   events.addEventListener("message", (message) => {
-    const event = JSON.parse(message.data);
+    let event;
+
+    try {
+      event = JSON.parse(message.data);
+    } catch (error) {
+      connectionStatus.textContent = "Received malformed event data. Waiting for the next update.";
+      return;
+    }
 
     if (event.type === "connected") {
       return;

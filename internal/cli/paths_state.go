@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -23,13 +26,17 @@ func writeMCPConfig(opts CommonOptions) (string, error) {
 	}
 	servers := map[string]any{}
 	for _, agent := range product.SpecialistAgents() {
+		env := map[string]string{
+			"AGENT_WORKFORCE_HOME":       stateDir(),
+			"AGENT_WORKFORCE_OFFICE_URL": opts.OfficeURL,
+		}
+		if opts.ForgeBin != "" {
+			env["AGENT_WORKFORCE_FORGE_BIN"] = opts.ForgeBin
+		}
 		servers[product.AgentMCPServerName(agent.ID)] = map[string]any{
 			"command": MCPCommand,
 			"args":    []string{"--agent", agent.ID},
-			"env": map[string]string{
-				"AGENT_WORKFORCE_HOME":       stateDir(),
-				"AGENT_WORKFORCE_OFFICE_URL": opts.OfficeURL,
-			},
+			"env":     env,
 		}
 	}
 	payload := map[string]any{"mcpServers": servers}
@@ -150,15 +157,33 @@ func printJSON(v any) error {
 	return nil
 }
 
-func confirm(prompt string, def bool) bool {
-	fmt.Printf("%s [Y/n] ", prompt)
-	var s string
-	_, _ = fmt.Scanln(&s)
+func confirm(prompt string, def bool) (bool, error) {
+	if !isTTY() {
+		return false, errors.New("confirmation requires a TTY; rerun with --yes or --json")
+	}
+	choice := "[y/N]"
+	if def {
+		choice = "[Y/n]"
+	}
+	fmt.Printf("%s %s ", prompt, choice)
+	s, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" {
-		return def
+		if errors.Is(err, io.EOF) {
+			return false, errors.New("confirmation input unavailable; rerun with --yes or --json")
+		}
+		return def, nil
 	}
-	return s == "y" || s == "yes"
+	if s == "y" || s == "yes" {
+		return true, nil
+	}
+	if s == "n" || s == "no" {
+		return false, nil
+	}
+	return false, fmt.Errorf("invalid confirmation response %q", s)
 }
 
 func resolveForgeBin(flag string) (string, error) {

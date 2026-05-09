@@ -325,7 +325,7 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 	if args == nil {
 		args = map[string]any{}
 	}
-	if params.Name == product.NotifyToolName || params.Name == "" {
+	if params.Name == product.NotifyToolName {
 		ok := s.notify(toString(args["agent_id"]), toString(args["state"]), toString(args["title"]), os.Getenv("AGENT_WORKFORCE_OFFICE_URL"))
 		return textResult(map[string]any{"ok": ok})
 	}
@@ -429,7 +429,7 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 		"output":        output,
 		"stderr":        stderr,
 		"exit_code":     result.ExitCode,
-		"idle_after_ms": product.AgentIdleDelay.Milliseconds(),
+		"idle_after_ms": s.idleDelay.Milliseconds(),
 	}
 	if result.Err != nil {
 		payload["error"] = result.Err.Error()
@@ -506,14 +506,6 @@ func classifyForgeStreamEvents(value string, chunkLimit int) []forgeStreamEvent 
 	return events
 }
 
-func sanitizeForgeOutputChunks(value string, chunkLimit int) []string {
-	value = ansiOSCRegexp.ReplaceAllString(value, "")
-	value = ansiCSIRegexp.ReplaceAllString(value, "")
-	value = strings.ReplaceAll(value, "\r", "\n")
-	value = removeControlChars(value)
-	return chunkForgeOutputText(value, chunkLimit)
-}
-
 func chunkForgeOutputText(value string, chunkLimit int) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
@@ -551,7 +543,7 @@ func cleanForgeText(value string) string {
 			}
 			continue
 		}
-		if isForgeProgressLine(trimmed) {
+		if isForgeLifecycleLine(trimmed) || isForgeProgressLine(trimmed) {
 			continue
 		}
 		kept = append(kept, line)
@@ -578,6 +570,10 @@ func extractFinalAnswer(value string) string {
 }
 
 func extractMarkedFinalAnswer(value string) (string, bool) {
+	value = ansiOSCRegexp.ReplaceAllString(value, "")
+	value = ansiCSIRegexp.ReplaceAllString(value, "")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = removeControlChars(value)
 	start := strings.LastIndex(value, finalAnswerStartMarker)
 	if start < 0 {
 		return "", false
@@ -635,7 +631,13 @@ func isFinalAnswerMarker(line string) bool {
 }
 
 func isForgeLifecycleLine(line string) bool {
-	return forgeLifecycleLineRegexp.MatchString(line)
+	if forgeLifecycleLineRegexp.MatchString(line) {
+		return true
+	}
+	if !strings.HasPrefix(line, "● [") {
+		return false
+	}
+	return strings.Contains(line, "] Initialize ") || strings.Contains(line, "] Finished")
 }
 
 func isForgeProgressLine(line string) bool {
@@ -881,10 +883,6 @@ func Execute() error {
 	cmd.Flags().StringVar(&title, "title", "", "Optional display title.")
 	cmd.Flags().StringVar(&officeURL, "office-url", envDefault("AGENT_WORKFORCE_OFFICE_URL", product.DefaultOfficeURL()), "Pixel office URL.")
 	return cmd.Execute()
-}
-
-func write(payload any) {
-	writeJSONLine(os.Stdout, payload)
 }
 
 func toString(v any) string {

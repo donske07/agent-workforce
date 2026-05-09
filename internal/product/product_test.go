@@ -139,7 +139,7 @@ func TestBundledAgentFilesMatchCoordinatorProgrammerArchitecture(t *testing.T) {
 	}
 }
 
-func TestCoordinatorAllowsForgeVisibleAggregateMCPWorkflow(t *testing.T) {
+func TestCoordinatorAllowsForgeVisibleServerQualifiedMCPWorkflow(t *testing.T) {
 	data, err := assets.Files.ReadFile("files/forge/agents/coordinator.md")
 	if err != nil {
 		t.Fatal(err)
@@ -150,37 +150,43 @@ func TestCoordinatorAllowsForgeVisibleAggregateMCPWorkflow(t *testing.T) {
 		seen[tool] = true
 	}
 
-	required := []string{ForgeMCPToolName(PackageName, NotifyToolName)}
 	for _, agent := range SpecialistAgents() {
-		required = append(required, ForgeMCPToolName(PackageName, AgentToolName(agent.ID)))
-	}
-	for _, tool := range required {
-		if !seen[tool] {
-			t.Fatalf("coordinator is missing Forge-visible aggregate MCP tool %s", tool)
+		serverName := AgentMCPServerName(agent.ID)
+		for _, tool := range []string{
+			ForgeMCPToolName(serverName, NotifyToolName),
+			ForgeMCPToolName(serverName, AgentToolName(agent.ID)),
+		} {
+			if !seen[tool] {
+				t.Fatalf("coordinator is missing Forge-visible server-qualified MCP tool %s", tool)
+			}
 		}
 	}
 
-	frontendWrapper := ForgeMCPToolName(PackageName, AgentToolName("frontend-programmer"))
+	frontendWrapper := ForgeMCPToolName(AgentMCPServerName("frontend-programmer"), AgentToolName("frontend-programmer"))
 	if !seen[frontendWrapper] {
-		t.Fatalf("coordinator frontend workflow is missing aggregate MCP wrapper %s", frontendWrapper)
+		t.Fatalf("coordinator frontend workflow is missing server-qualified MCP wrapper %s", frontendWrapper)
 	}
 
 	for _, agent := range SpecialistAgents() {
 		for _, tool := range []string{
-			ForgeMCPToolName(AgentMCPServerName(agent.ID), NotifyToolName),
-			ForgeMCPToolName(AgentMCPServerName(agent.ID), AgentToolName(agent.ID)),
+			ForgeMCPToolName(PackageName, NotifyToolName),
+			ForgeMCPToolName(PackageName, AgentToolName(agent.ID)),
 		} {
 			if seen[tool] {
-				t.Fatalf("coordinator should use aggregate Forge-visible MCP wrappers, but found server-qualified tool %s", tool)
+				t.Fatalf("coordinator should use server-qualified Forge-visible MCP wrappers, but found aggregate tool %s", tool)
 			}
 		}
 	}
 }
 
 func coordinatorToolProfile() []string {
-	tools := []string{"sem_search", "fs_search", "read", "fetch", "followup", "skill", "plan", "todo_write", "todo_read", "agent_workforce_*", ForgeMCPToolName(PackageName, NotifyToolName)}
+	tools := []string{"sem_search", "fs_search", "read", "fetch", "followup", "skill", "plan", "todo_write", "todo_read", "agent_workforce_*"}
 	for _, agent := range SpecialistAgents() {
-		tools = append(tools, ForgeMCPToolName(PackageName, AgentToolName(agent.ID)))
+		serverName := AgentMCPServerName(agent.ID)
+		tools = append(tools,
+			ForgeMCPToolName(serverName, NotifyToolName),
+			ForgeMCPToolName(serverName, AgentToolName(agent.ID)),
+		)
 	}
 	return tools
 }

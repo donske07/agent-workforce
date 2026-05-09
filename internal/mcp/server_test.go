@@ -82,7 +82,7 @@ func TestCoordinatorFrontendDelegationWorkflowEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frontendWrapper := product.ForgeMCPToolName(product.PackageName, product.AgentToolName("frontend-programmer"))
+	frontendWrapper := product.ForgeMCPToolName(product.AgentMCPServerName("frontend-programmer"), product.AgentToolName("frontend-programmer"))
 	coordinatorTools := parseTestAgentTools(t, string(coordinator))
 	if !hasString(coordinatorTools, frontendWrapper) {
 		t.Fatalf("coordinator is missing Forge-visible frontend MCP wrapper %s", frontendWrapper)
@@ -319,6 +319,9 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 	}
 	if payload["exit_code"] != 0 {
 		t.Fatalf("unexpected exit code: %#v", payload["exit_code"])
+	}
+	if payload["idle_after_ms"] != int64(0) {
+		t.Fatalf("unexpected idle delay: %#v", payload["idle_after_ms"])
 	}
 	if ranAgent.ID != "frontend-programmer" {
 		t.Fatalf("unexpected forge agent: %s", ranAgent.ID)
@@ -704,6 +707,28 @@ func TestNotifyToolRemainsNotificationOnly(t *testing.T) {
 	payload := decodeTextPayload(t, result)
 	if payload["ok"] != true || !notified {
 		t.Fatalf("unexpected notify result: %#v notified=%v", payload, notified)
+	}
+}
+
+func TestEmptyToolNameIsRejected(t *testing.T) {
+	state := &serverState{
+		notifyOffice: func(agentID, state, title, officeURL string) bool {
+			t.Fatal("empty tool name should not notify")
+			return false
+		},
+		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
+			t.Fatal("empty tool name should not run forge")
+			return forgeResult{}
+		},
+	}
+
+	result := state.handleToolCall(callParams{Name: "", Arguments: map[string]any{}})
+	payload := decodeTextPayload(t, result)
+	if payload["ok"] != false {
+		t.Fatalf("expected empty tool name to fail, got %#v", payload)
+	}
+	if !strings.Contains(payload["error"].(string), "unknown tool") {
+		t.Fatalf("unexpected error: %#v", payload["error"])
 	}
 }
 
