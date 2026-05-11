@@ -310,18 +310,18 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 	if args == nil {
 		args = map[string]any{}
 	}
-	agent, ok := s.agentForTool(params.Name)
-	if !ok {
-		return textResult(map[string]any{"ok": false, "error": "unknown tool: " + params.Name})
-	}
-	if os.Getenv(mcpChildDispatchEnv) == "1" {
-		return textResult(map[string]any{"ok": false, "agent_id": agent.ID, "title": agent.Title, "error": "refusing nested Agent Workforce MCP specialist dispatch"})
-	}
 	task := strings.TrimSpace(toString(args["task"]))
 	context := strings.TrimSpace(toString(args["context"]))
 	expectedOutput := strings.TrimSpace(toString(args["expected_output"]))
+	agent, ok := s.agentForTool(params.Name)
+	if !ok {
+		return validationFailureResult("unknown tool: " + params.Name)
+	}
 	if task == "" {
-		return textResult(map[string]any{"ok": false, "agent_id": agent.ID, "title": agent.Title, "error": "task is required"})
+		return specialistFailureResult(agent, "", "task is required", "Provide a non-empty task and retry the specialist request.")
+	}
+	if os.Getenv(mcpChildDispatchEnv) == "1" {
+		return specialistFailureResult(agent, task, "refusing nested Agent Workforce MCP specialist dispatch", "Complete the current specialist task directly instead of delegating to another Agent Workforce MCP specialist.")
 	}
 	prompt := buildForgePrompt(task, context, expectedOutput)
 	officeURL := os.Getenv("AGENT_WORKFORCE_OFFICE_URL")
@@ -386,7 +386,6 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 	cleanedOutput := cleanForgeText(result.Output)
 	cleanedStderr := cleanForgeText(result.Stderr)
 	tokenUsage := estimateForgeTokenUsage(prompt, cleanedOutput, cleanedStderr)
-	auditTrail := specialistAuditTrail(agent, success, runElapsed, tokenUsage)
 	s.postForgeEvent(map[string]any{
 		"type":        forgeRunFinishedEvent,
 		"run_id":      runID,
@@ -400,43 +399,14 @@ func (s *serverState) handleToolCall(params callParams) map[string]any {
 		"sequence":    atomic.AddInt64(&sequence, 1),
 		"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
 	}, officeURL)
-	idleNotified := false
 	if notified {
-		idleNotified = s.notifyIdleAfterDelay(agent.ID, agent.Title, officeURL)
+		s.notifyIdleAfterDelay(agent.ID, agent.Title, officeURL)
 	}
 	output := extractFinalAnswer(cleanedOutput)
-	stderr := ""
-	if !success {
-		output = truncateText(output, maxFailureOutputChars)
-		stderr = truncateText(cleanedStderr, maxFailureOutputChars)
-	}
-	payload := map[string]any{
-		"ok":            success,
-		"notified":      notified,
-		"idle_notified": idleNotified,
-		"agent_id":      agent.ID,
-		"title":         agent.Title,
-		"mcp_server":    product.AgentMCPServerName(agent.ID),
-		"mcp_tool":      product.AgentToolName(agent.ID),
-		"output":        output,
-		"stderr":        stderr,
-		"exit_code":     result.ExitCode,
-		"elapsed":       formatElapsed(runElapsed),
-		"elapsed_ms":    runElapsed.Milliseconds(),
-		"token_usage":   tokenUsage,
-		"audit_trail":   []map[string]any{auditTrail},
-		"idle_after_ms": s.idleDelay.Milliseconds(),
-	}
-	if totalTokens, ok := int64FromAny(tokenUsage["total_tokens"]); ok {
-		payload["tokens_consumed"] = totalTokens
-	}
-	if result.Err != nil {
-		payload["error"] = result.Err.Error()
-	}
 	if success {
-		return specialistSuccessResult(payload)
+		return specialistSuccessResult(output)
 	}
-	return textResult(payload)
+	return specialistFailureResult(agent, task, forgeFailureSummary(result, output, cleanedStderr), "Review the specialist diagnostic, address the failure, and retry the task.")
 }
 
 func newForgeRunID(agentID string) string {
@@ -639,23 +609,6 @@ func estimateTokens(value string) int64 {
 	return int64(len(matches))
 }
 
-func specialistAuditTrail(agent product.Agent, success bool, elapsed time.Duration, tokenUsage map[string]any) map[string]any {
-	status := "Completed"
-	if !success {
-		status = "Failed"
-	}
-	return map[string]any{
-		"consulted_agent_id":    agent.ID,
-		"consulted_agent_title": agent.Title,
-		"mcp_server":            product.AgentMCPServerName(agent.ID),
-		"mcp_tool":              product.AgentToolName(agent.ID),
-		"status":                status,
-		"elapsed":               formatElapsed(elapsed),
-		"elapsed_ms":            elapsed.Milliseconds(),
-		"token_usage":           tokenUsage,
-	}
-}
-
 func formatElapsed(elapsed time.Duration) string {
 	if elapsed < 0 {
 		elapsed = 0
@@ -771,110 +724,93 @@ func startsWithSpinner(line string) bool {
 	return spinnerPrefix(line) != ""
 }
 
-func specialistSuccessResult(payload map[string]any) map[string]any {
-	output := strings.TrimSpace(toString(payload["output"]))
+func specialistSuccessResult(output string) map[string]any {
+	output = strings.TrimSpace(output)
 	if output == "" {
 		output = "Specialist completed successfully."
-		payload["output"] = output
 	}
+	return mcpTextResult(output, false)
+}
+
+func validationFailureResult(summary string) map[string]any {
+	return mcpTextResult(failureStatusText("", "", summary, ""), true)
+}
+
+func specialistFailureResult(agent product.Agent, task, summary, followUp string) map[string]any {
+	return mcpTextResult(failureStatusText(agent.ID, task, summary, followUp), true)
+}
+
+func mcpTextResult(text string, isError bool) map[string]any {
 	return map[string]any{
-		"content":           []map[string]string{{"type": "text", "text": specialistContentText(payload)}},
-		"structuredContent": payload,
+		"content": []map[string]string{{"type": "text", "text": strings.TrimSpace(text)}},
+		"isError": isError,
 	}
 }
 
-func specialistContentText(payload map[string]any) string {
-	output := strings.TrimSpace(toString(payload["output"]))
-	if audit := auditTrailMarkdown(payload["audit_trail"]); audit != "" {
-		if output == "" {
-			return audit
-		}
-		return output + "\n\n" + audit
-	}
-	return output
-}
-
-func auditTrailMarkdown(value any) string {
-	entries := auditTrailEntries(value)
-	if len(entries) == 0 {
-		return ""
+func failureStatusText(agentID, task, summary, followUp string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		summary = "Specialist request failed."
 	}
 
 	var out strings.Builder
-	out.WriteString("## Audit Trail\n\n")
-	out.WriteString("| Consulted MCP agent | Status | Tokens consumed | Response time |\n")
-	out.WriteString("|---|---|---|---|\n")
-	for _, entry := range entries {
-		out.WriteString("| ")
-		out.WriteString(markdownTableCell(auditAgentName(entry)))
-		out.WriteString(" | ")
-		out.WriteString(markdownTableCell(toString(entry["status"])))
-		out.WriteString(" | ")
-		out.WriteString(markdownTableCell(auditTokenSummary(entry["token_usage"])))
-		out.WriteString(" | ")
-		out.WriteString(markdownTableCell(toString(entry["elapsed"])))
-		out.WriteString(" |\n")
+	out.WriteString("STATUS: failed\n")
+	if agentID != "" {
+		out.WriteString("AGENT: ")
+		out.WriteString(specialistStatusAgentID(agentID))
+		out.WriteString("\n")
+	}
+	if strings.TrimSpace(task) != "" {
+		out.WriteString("TASK: ")
+		out.WriteString(compactText(task, 240))
+		out.WriteString("\n")
+	}
+	if agentID != "" || strings.TrimSpace(task) != "" {
+		out.WriteString("\n")
+	}
+	out.WriteString("SUMMARY:\n")
+	out.WriteString(compactText(summary, maxFailureOutputChars))
+	if strings.TrimSpace(followUp) != "" {
+		out.WriteString("\n\nFOLLOW_UP:\n")
+		out.WriteString(compactText(followUp, 600))
 	}
 	return strings.TrimSpace(out.String())
 }
 
-func auditTrailEntries(value any) []map[string]any {
-	switch entries := value.(type) {
-	case []map[string]any:
-		return entries
-	case []any:
-		out := make([]map[string]any, 0, len(entries))
-		for _, entry := range entries {
-			if item, ok := entry.(map[string]any); ok {
-				out = append(out, item)
-			}
+func specialistStatusAgentID(agentID string) string {
+	return strings.ReplaceAll(strings.TrimSpace(agentID), "-", "_")
+}
+
+func forgeFailureSummary(result forgeResult, output, stderr string) string {
+	parts := []string{"Specialist execution failed."}
+	if result.Err != nil {
+		parts[0] = "Specialist execution failed: " + result.Err.Error() + "."
+	}
+	if diagnostic := firstNonEmpty(output, stderr); diagnostic != "" {
+		parts = append(parts, "Diagnostic: "+compactText(diagnostic, 800))
+	}
+	return strings.Join(parts, " ")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
 		}
-		return out
-	default:
-		return nil
 	}
+	return ""
 }
 
-func auditAgentName(entry map[string]any) string {
-	title := strings.TrimSpace(toString(entry["consulted_agent_title"]))
-	id := strings.TrimSpace(toString(entry["consulted_agent_id"]))
-	if title == "" {
-		return id
+func compactText(value string, limit int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if limit <= 0 || value == "" {
+		return value
 	}
-	if id == "" || id == title {
-		return title
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
 	}
-	return fmt.Sprintf("%s (`%s`)", title, id)
-}
-
-func auditTokenSummary(value any) string {
-	usage, ok := value.(map[string]any)
-	if !ok {
-		return "Unavailable"
-	}
-	total, ok := int64FromAny(usage["total_tokens"])
-	if !ok || total <= 0 {
-		return "Unavailable"
-	}
-	if estimated, _ := usage["estimated"].(bool); estimated || toString(usage["source"]) == "estimated" {
-		return fmt.Sprintf("~%d estimated", total)
-	}
-	return fmt.Sprintf("%d", total)
-}
-
-func markdownTableCell(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "Unavailable"
-	}
-	value = strings.ReplaceAll(value, "|", "\\|")
-	value = strings.ReplaceAll(value, "\n", "<br>")
-	return value
-}
-
-func textResult(payload map[string]any) map[string]any {
-	content, _ := json.Marshal(payload)
-	return map[string]any{"content": []map[string]string{{"type": "text", "text": string(content)}}}
+	return strings.TrimSpace(string(runes[:limit])) + " [truncated]"
 }
 
 func initializeResult() map[string]any {

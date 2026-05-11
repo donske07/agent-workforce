@@ -104,23 +104,66 @@ Final user responses must:
 - Omit specialist progress text.
 - Omit todo/progress logs, command transcripts, and full build output unless the user explicitly asks for diagnostic details.
 - Omit MCP subprocess details, command arguments, stdout/stderr wrappers, and JSON payloads unless the user asks for implementation details.
-- Include the audit trail supplied by each successful specialist result.
+- Do not include audit trails in final user responses unless the user explicitly asks for operational diagnostics.
 
-## Audit Trail Format
+## Minimal MCP Response Contract
 
-When an expert was consulted, preserve the specialist result's audit trail in the final answer. The Agent Workforce MCP server supplies the consulted MCP agent, token count, and response time.
+Successful Agent Workforce MCP specialist responses contain only:
 
-Use this format:
+- `content`: the specialist's compact final-answer text.
+- `isError: false`: explicit success status.
 
-```md
-## Audit Trail
+Successful responses do not include `structuredContent`, audit trails, raw MCP JSON, subprocess details, stdout/stderr wrappers, progress logs, full command transcripts, or duplicated metadata.
 
-| Consulted MCP agent | Status | Tokens consumed | Response time |
-|---|---|---|---|
-| <name> | <Completed/Failed> | <token count> | <duration> |
+Failed Agent Workforce MCP specialist responses contain only:
+
+- `content`: compact diagnostic or specialist failure status text.
+- `isError: true`: explicit failure status.
+
+The response key is exactly `isError`, not `is_error`. Failed responses should be compact, human-readable, and actionable for retry or final synthesis. They should not expose raw JSON payloads, full stdout/stderr, subprocess wrappers, progress logs, or audit tables by default.
+
+## Specialist Response Shape
+
+Specialists produce compact final-answer text. The MCP server wraps that text in the MCP response envelope; specialists must not manually emit MCP JSON.
+
+When applicable, specialists should format final answers as a compact status block:
+
+```text
+STATUS: completed
+AGENT: <specialist_id_with_underscores>
+TASK: <short task summary>
+
+SUMMARY:
+<what was completed or found>
+
+FILES:
+<path>: <short change summary>
+
+COMMANDS:
+<command>: <passed/failed/not run>
+
+TESTS: <passed/failed/not run/not applicable>
+TYPECHECK_LINT: <passed/failed/not run/not applicable>
+
+RISKS:
+<remaining risk or none>
+
+FOLLOW_UP:
+<recommended next step or none>
+
+HUMAN_REVIEW: <yes/no>
+REASON: <why human review is or is not needed>
 ```
 
-Do not include raw tool names, command arguments, or JSON payloads unless the user specifically asks for implementation details.
+Fields that do not apply may be omitted or marked `not applicable`. Do not fabricate files, commands, tests, risks, or follow-up items.
+
+Do not include raw command transcripts, stdout/stderr wrappers, progress logs, internal reasoning, manually constructed MCP JSON, or full build output.
+
+## Audit and Completion Metadata
+
+Agent Workforce records specialist completion metadata in Pixel Agent Office logs when the MCP agent completes. This includes consulted specialist identity, completion status, token usage, response time, elapsed milliseconds, exit status, and timestamps where available.
+
+Do not include audit trails in final user responses unless the user explicitly asks for operational diagnostics.
 
 ## Failure Handling
 

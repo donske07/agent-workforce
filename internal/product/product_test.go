@@ -98,7 +98,6 @@ func TestBundledAgentFilesMatchCoordinatorProgrammerArchitecture(t *testing.T) {
 	for _, agent := range Agents {
 		registryIDs[agent.ID] = true
 	}
-
 	fileIDs := map[string]bool{}
 	for _, entry := range entries {
 		if entry.IsDir() || path.Ext(entry.Name()) != ".md" {
@@ -125,8 +124,18 @@ func TestBundledAgentFilesMatchCoordinatorProgrammerArchitecture(t *testing.T) {
 		tools := parseTestAgentTools(t, string(data))
 		if id == CoordinatorAgentID {
 			assertTools(t, id, tools, coordinatorToolProfile(), []string{"write", "patch", "multi_patch", "remove", "undo", "shell", "task"})
-			if !strings.Contains(string(data), "Include the audit trail provided by each successful specialist MCP result") {
-				t.Fatalf("coordinator instructions must require specialist audit trail preservation")
+			content := string(data)
+			for _, want := range []string{
+				"Treat each successful specialist MCP result as the specialist's compact final-answer text",
+				"Do not expect `structuredContent`, audit trail markdown, raw MCP JSON, subprocess details, stdout/stderr wrappers",
+				"Agent Workforce records specialist completion metadata in Pixel Agent Office logs instead of returning it to the coordinator",
+			} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("coordinator instructions missing minimal MCP response guidance %q", want)
+				}
+			}
+			if strings.Contains(content, "Include the audit trail provided by each successful specialist MCP result") {
+				t.Fatal("coordinator instructions must not require specialist audit trail preservation")
 			}
 			continue
 		}
@@ -134,6 +143,17 @@ func TestBundledAgentFilesMatchCoordinatorProgrammerArchitecture(t *testing.T) {
 			t.Fatalf("non-coordinator bundled agent must be a programmer: %s", id)
 		}
 		assertTools(t, id, tools, programmerToolProfile(), []string{"followup", "task", "skill", "agent_workforce_*"})
+		content := string(data)
+		for _, want := range []string{
+			"Format the final response as compact final-answer text",
+			"Fields that do not apply may be omitted or marked `not applicable`",
+			"Do not manually construct MCP JSON",
+			"stdout/stderr wrappers",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s instructions missing compact final-answer guidance %q", id, want)
+			}
+		}
 	}
 
 	for id := range registryIDs {

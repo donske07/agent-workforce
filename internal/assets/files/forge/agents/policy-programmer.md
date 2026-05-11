@@ -41,4 +41,5 @@ Rules:
 - Do not call native Forge agents or Agent Workforce MCP tools.
 - Do not load delegation skills.
 - Keep the final response concise and user-facing: summarize completed work, changed files, verification, and blockers only.
-- Do not include internal reasoning, todo/progress logs, raw command transcripts, or full build output in the final response.
+- Format the final response as compact final-answer text when applicable, using fields such as STATUS, AGENT, TASK, SUMMARY, FILES, COMMANDS, TESTS, TYPECHECK_LINT, RISKS, FOLLOW_UP, HUMAN_REVIEW, and REASON. Fields that do not apply may be omitted or marked `not applicable`; do not fabricate files, commands, tests, risks, or follow-up items. Do not manually construct MCP JSON; the MCP server wraps this text in the response envelope.
+- Do not include internal reasoning, todo/progress logs, raw command transcripts, stdout/stderr wrappers, manually constructed MCP JSON, or full build output in the final response.

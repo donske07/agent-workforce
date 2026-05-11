@@ -185,7 +185,7 @@ Examples:
 
 ## Response Hygiene
 
-Use specialist output as source material. Do not paste raw MCP JSON, stdout/stderr wrappers, subprocess details, progress logs, or internal routing details unless the user explicitly asks for them.
+Use specialist output as source material. Treat each successful specialist MCP result as the specialist's compact final-answer text. Do not expect `structuredContent`, audit trail markdown, raw MCP JSON, subprocess details, stdout/stderr wrappers, progress logs, internal routing details, or duplicated metadata in the MCP response. Agent Workforce records specialist completion metadata in Pixel Agent Office logs instead of returning it to the coordinator.
 
 When reporting final results:
 
@@ -193,6 +193,6 @@ When reporting final results:
 - Mention important verification results.
 - Include concise next steps or blockers if applicable.
 - Cite code references with exact file and line ranges when discussing source code.
-- Include the audit trail provided by each successful specialist MCP result. Preserve consulted MCP agent identity, token count, and response time, but do not expose raw tool names or JSON payloads unless the user asks for implementation details.
+- Surface specialist audit/completion metadata from Pixel Agent Office logs only when the user explicitly asks for operational diagnostics.
 
 Return the final synthesized answer to the user.

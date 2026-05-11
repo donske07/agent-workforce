@@ -150,21 +150,11 @@ PY
 		t.Fatal("tools/call did not produce a response")
 	}
 	callResult := callResponse["result"].(map[string]any)
-	payload := callResult["structuredContent"].(map[string]any)
-	if payload["ok"] != true {
-		t.Fatalf("expected successful frontend delegation, got %#v", payload)
+	visibleContent := resultText(t, callResult, false)
+	if !strings.Contains(visibleContent, "Frontend Programmer") || !strings.Contains(visibleContent, "Vue.js") {
+		t.Fatalf("frontend specialist response missing expected content: %q", visibleContent)
 	}
-	if payload["agent_id"] != "frontend-programmer" {
-		t.Fatalf("expected frontend-programmer delegation, got %#v", payload["agent_id"])
-	}
-	output := payload["output"].(string)
-	if !strings.Contains(output, "Frontend Programmer") || !strings.Contains(output, "Vue.js") {
-		t.Fatalf("frontend specialist response missing expected content: %q", output)
-	}
-	visibleContent := callResult["content"].([]map[string]string)[0]["text"]
-	if !strings.Contains(visibleContent, output) || !strings.Contains(visibleContent, "## Audit Trail") {
-		t.Fatalf("visible MCP response should include specialist final answer and audit trail, got %q", visibleContent)
-	}
+	assertNoAuditTrail(t, visibleContent)
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -308,60 +298,11 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 		},
 	})
 
-	payload := decodeTextPayload(t, result)
-	if payload["ok"] != true {
-		t.Fatalf("expected ok response, got %#v", payload)
+	contentText := resultText(t, result, false)
+	if contentText != "Hello specialist" {
+		t.Fatalf("unexpected visible content: %q", contentText)
 	}
-	if payload["agent_id"] != "frontend-programmer" {
-		t.Fatalf("unexpected agent id: %#v", payload["agent_id"])
-	}
-	if payload["output"] != "Hello specialist" {
-		t.Fatalf("unexpected output: %#v", payload["output"])
-	}
-	if payload["stderr"] != "" {
-		t.Fatalf("successful response should omit noisy stderr, got %#v", payload["stderr"])
-	}
-	if payload["exit_code"] != 0 {
-		t.Fatalf("unexpected exit code: %#v", payload["exit_code"])
-	}
-	if payload["idle_after_ms"] != int64(0) {
-		t.Fatalf("unexpected idle delay: %#v", payload["idle_after_ms"])
-	}
-	if payload["mcp_server"] != product.AgentMCPServerName("frontend-programmer") {
-		t.Fatalf("unexpected MCP server: %#v", payload["mcp_server"])
-	}
-	if payload["mcp_tool"] != product.AgentToolName("frontend-programmer") {
-		t.Fatalf("unexpected MCP tool: %#v", payload["mcp_tool"])
-	}
-	elapsedMS, ok := payload["elapsed_ms"].(int64)
-	if !ok || elapsedMS < 0 {
-		t.Fatalf("expected elapsed_ms audit metadata, got %#v", payload["elapsed_ms"])
-	}
-	tokenUsage, ok := payload["token_usage"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected token usage metadata, got %#v", payload["token_usage"])
-	}
-	if tokenUsage["estimated"] != true || tokenUsage["source"] != "estimated" {
-		t.Fatalf("expected estimated token usage, got %#v", tokenUsage)
-	}
-	totalTokens, ok := int64FromAny(tokenUsage["total_tokens"])
-	if !ok || totalTokens <= 0 {
-		t.Fatalf("expected positive total token usage, got %#v", tokenUsage["total_tokens"])
-	}
-	if payload["tokens_consumed"] != totalTokens {
-		t.Fatalf("tokens_consumed should mirror total token usage, got %#v want %#v", payload["tokens_consumed"], totalTokens)
-	}
-	auditTrail, ok := payload["audit_trail"].([]map[string]any)
-	if !ok || len(auditTrail) != 1 {
-		t.Fatalf("expected one audit trail entry, got %#v", payload["audit_trail"])
-	}
-	if auditTrail[0]["consulted_agent_id"] != "frontend-programmer" || auditTrail[0]["status"] != "Completed" {
-		t.Fatalf("unexpected audit trail entry: %#v", auditTrail[0])
-	}
-	contentText := result["content"].([]map[string]string)[0]["text"]
-	if !strings.Contains(contentText, "## Audit Trail") || !strings.Contains(contentText, "Frontend Programmer (`frontend-programmer`)") || !strings.Contains(contentText, "estimated") {
-		t.Fatalf("visible response missing audit trail:\n%s", contentText)
-	}
+	assertNoAuditTrail(t, contentText)
 	if ranAgent.ID != "frontend-programmer" {
 		t.Fatalf("unexpected forge agent: %s", ranAgent.ID)
 	}
@@ -386,6 +327,33 @@ func TestSpecialistToolCallRunsForgeAgentAndNotifiesOfficeLifecycle(t *testing.T
 	}
 	if postedEvents[0]["type"] != forgeRunStartedEvent || postedEvents[5]["type"] != forgeRunFinishedEvent {
 		t.Fatalf("unexpected forge lifecycle events: %#v", postedEvents)
+	}
+	finishEvent := postedEvents[5]
+	if finishEvent["agent_id"] != "frontend-programmer" || finishEvent["title"] != "Frontend Programmer" || finishEvent["ok"] != true || finishEvent["exit_code"] != 0 {
+		t.Fatalf("finish event missing specialist completion metadata: %#v", finishEvent)
+	}
+	if elapsed, ok := finishEvent["elapsed"].(string); !ok || elapsed == "" {
+		t.Fatalf("finish event missing elapsed string: %#v", finishEvent)
+	}
+	if elapsedMS, ok := finishEvent["elapsed_ms"].(int64); !ok || elapsedMS < 0 {
+		t.Fatalf("finish event missing elapsed_ms: %#v", finishEvent)
+	}
+	tokenUsage, ok := finishEvent["token_usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("finish event missing token usage metadata: %#v", finishEvent)
+	}
+	if tokenUsage["estimated"] != true || tokenUsage["source"] != "estimated" {
+		t.Fatalf("expected estimated token usage, got %#v", tokenUsage)
+	}
+	totalTokens, ok := int64FromAny(tokenUsage["total_tokens"])
+	if !ok || totalTokens <= 0 {
+		t.Fatalf("expected positive total token usage, got %#v", tokenUsage["total_tokens"])
+	}
+	if sequence, ok := finishEvent["sequence"].(int64); !ok || sequence <= 0 {
+		t.Fatalf("finish event missing sequence: %#v", finishEvent)
+	}
+	if timestamp, ok := finishEvent["timestamp"].(string); !ok || timestamp == "" {
+		t.Fatalf("finish event missing timestamp: %#v", finishEvent)
 	}
 	command, ok := postedEvents[0]["command"].(string)
 	if !ok || !strings.HasPrefix(command, "forge --agent frontend-programmer -p ") || !strings.Contains(command, "Task:\\nsay hi") {
@@ -452,22 +420,31 @@ func TestSpecialistToolCallReturnsFinalAnswerOnly(t *testing.T) {
 	}
 
 	result := state.handleToolCall(callParams{Name: product.AgentToolName("frontend-programmer"), Arguments: map[string]any{"task": "create vue app"}})
-	payload := decodeTextPayload(t, result)
-	output, _ := payload["output"].(string)
-	if payload["ok"] != true {
-		t.Fatalf("expected ok response, got %#v", payload)
-	}
+	contentText := resultText(t, result, false)
 	for _, forbidden := range []string{"Considering boilerplate", "I'm thinking", "npm install", "vite v8", "trailing transcript"} {
-		if strings.Contains(output, forbidden) {
-			t.Fatalf("output leaked transcript fragment %q:\n%s", forbidden, output)
+		if strings.Contains(contentText, forbidden) {
+			t.Fatalf("output leaked transcript fragment %q:\n%s", forbidden, contentText)
 		}
 	}
-	if !strings.Contains(output, "## Vue Boilerplate Created") || !strings.Contains(output, "npm run build passed") {
-		t.Fatalf("output missing final answer content:\n%s", output)
+	if !strings.Contains(contentText, "## Vue Boilerplate Created") || !strings.Contains(contentText, "npm run build passed") {
+		t.Fatalf("output missing final answer content:\n%s", contentText)
 	}
-	content := result["content"].([]map[string]string)
-	if !strings.Contains(content[0]["text"], output) || !strings.Contains(content[0]["text"], "## Audit Trail") {
-		t.Fatalf("visible MCP text should include final answer and audit trail, got %q", content[0]["text"])
+	assertNoAuditTrail(t, contentText)
+}
+
+func TestSpecialistToolCallUsesSuccessFallbackForEmptyOutput(t *testing.T) {
+	state := &serverState{
+		idleDelay:    0,
+		notifyOffice: func(agentID, state, title, officeURL string) bool { return true },
+		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
+			return forgeResult{Output: "", ExitCode: 0}
+		},
+	}
+
+	result := state.handleToolCall(callParams{Name: product.AgentToolName("backend-programmer"), Arguments: map[string]any{"task": "do work"}})
+	contentText := resultText(t, result, false)
+	if contentText != "Specialist completed successfully." {
+		t.Fatalf("unexpected fallback content: %q", contentText)
 	}
 }
 
@@ -499,22 +476,13 @@ func TestSpecialistToolCallReturnsForgeFailure(t *testing.T) {
 	}
 
 	result := state.handleToolCall(callParams{Name: product.AgentToolName("backend-programmer"), Arguments: map[string]any{"task": "do work"}})
-	payload := decodeTextPayload(t, result)
-	if payload["ok"] != false {
-		t.Fatalf("expected failure response, got %#v", payload)
+	text := failureResultText(t, result)
+	for _, want := range []string{"STATUS: failed", "AGENT: backend_programmer", "TASK: do work", "SUMMARY:", "exit status 7", "bad things", "FOLLOW_UP:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("failure response missing %q:\n%s", want, text)
+		}
 	}
-	if payload["agent_id"] != "backend-programmer" {
-		t.Fatalf("unexpected agent id: %#v", payload["agent_id"])
-	}
-	if payload["stderr"] != "bad things" {
-		t.Fatalf("unexpected stderr: %#v", payload["stderr"])
-	}
-	if payload["exit_code"] != float64(7) {
-		t.Fatalf("unexpected exit code: %#v", payload["exit_code"])
-	}
-	if !strings.Contains(payload["error"].(string), "exit status 7") {
-		t.Fatalf("unexpected error: %#v", payload["error"])
-	}
+	assertFailureDoesNotExposeRawPayload(t, text)
 }
 
 func TestSpecialistToolCallRejectsMissingTask(t *testing.T) {
@@ -524,13 +492,16 @@ func TestSpecialistToolCallRejectsMissingTask(t *testing.T) {
 	}}
 
 	result := state.handleToolCall(callParams{Name: product.AgentToolName("frontend-programmer"), Arguments: map[string]any{"task": "  "}})
-	payload := decodeTextPayload(t, result)
-	if payload["ok"] != false {
-		t.Fatalf("expected failure response, got %#v", payload)
+	text := failureResultText(t, result)
+	for _, want := range []string{"STATUS: failed", "AGENT: frontend_programmer", "SUMMARY:", "task is required", "FOLLOW_UP:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing task failure response missing %q:\n%s", want, text)
+		}
 	}
-	if payload["error"] != "task is required" {
-		t.Fatalf("unexpected error: %#v", payload["error"])
+	if strings.Contains(text, "TASK:") {
+		t.Fatalf("missing task failure should not fabricate a task line:\n%s", text)
 	}
+	assertFailureDoesNotExposeRawPayload(t, text)
 }
 
 func TestScopedSpecialistToolCallRejectsOtherAgentTool(t *testing.T) {
@@ -547,13 +518,16 @@ func TestScopedSpecialistToolCallRejectsOtherAgentTool(t *testing.T) {
 	}
 
 	result := state.handleToolCall(callParams{Name: product.AgentToolName("backend-programmer"), Arguments: map[string]any{"task": "do backend work"}})
-	payload := decodeTextPayload(t, result)
-	if payload["ok"] != false {
-		t.Fatalf("expected failure response, got %#v", payload)
+	text := failureResultText(t, result)
+	for _, want := range []string{"STATUS: failed", "SUMMARY:", "unknown tool"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("scoped unknown tool failure response missing %q:\n%s", want, text)
+		}
 	}
-	if !strings.Contains(payload["error"].(string), "unknown tool") {
-		t.Fatalf("unexpected error: %#v", payload["error"])
+	if strings.Contains(text, "AGENT:") || strings.Contains(text, "TASK:") {
+		t.Fatalf("validation failure should not fabricate agent or task metadata:\n%s", text)
 	}
+	assertFailureDoesNotExposeRawPayload(t, text)
 }
 
 func TestFindSpecialistAgentRejectsCoordinator(t *testing.T) {
@@ -570,13 +544,13 @@ func TestSpecialistToolCallRejectsNestedDispatch(t *testing.T) {
 	}}
 
 	result := state.handleToolCall(callParams{Name: product.AgentToolName("frontend-programmer"), Arguments: map[string]any{"task": "say hi"}})
-	payload := decodeTextPayload(t, result)
-	if payload["ok"] != false {
-		t.Fatalf("expected failure response, got %#v", payload)
+	text := failureResultText(t, result)
+	for _, want := range []string{"STATUS: failed", "AGENT: frontend_programmer", "TASK: say hi", "SUMMARY:", "nested", "FOLLOW_UP:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("nested dispatch failure response missing %q:\n%s", want, text)
+		}
 	}
-	if !strings.Contains(payload["error"].(string), "nested") {
-		t.Fatalf("unexpected error: %#v", payload["error"])
-	}
+	assertFailureDoesNotExposeRawPayload(t, text)
 }
 
 func TestClassifyForgeStreamEventsSplitsProgressFromTranscript(t *testing.T) {
@@ -767,13 +741,11 @@ func TestNotifyToolIsNotExposedForToolCalls(t *testing.T) {
 	}
 
 	result := state.handleToolCall(callParams{Name: product.NotifyToolName, Arguments: map[string]any{"agent_id": "frontend-programmer", "state": product.OfficeStateThinking, "title": "Frontend Programmer"}})
-	payload := decodeTextPayload(t, result)
-	if payload["ok"] != false {
-		t.Fatalf("expected notify tool call to fail, got %#v", payload)
+	text := failureResultText(t, result)
+	if !strings.Contains(text, "unknown tool") {
+		t.Fatalf("unexpected notify error: %s", text)
 	}
-	if !strings.Contains(payload["error"].(string), "unknown tool") {
-		t.Fatalf("unexpected notify error: %#v", payload["error"])
-	}
+	assertFailureDoesNotExposeRawPayload(t, text)
 }
 
 func TestEmptyToolNameIsRejected(t *testing.T) {
@@ -789,13 +761,11 @@ func TestEmptyToolNameIsRejected(t *testing.T) {
 	}
 
 	result := state.handleToolCall(callParams{Name: "", Arguments: map[string]any{}})
-	payload := decodeTextPayload(t, result)
-	if payload["ok"] != false {
-		t.Fatalf("expected empty tool name to fail, got %#v", payload)
+	text := failureResultText(t, result)
+	if !strings.Contains(text, "unknown tool") {
+		t.Fatalf("unexpected error: %s", text)
 	}
-	if !strings.Contains(payload["error"].(string), "unknown tool") {
-		t.Fatalf("unexpected error: %#v", payload["error"])
-	}
+	assertFailureDoesNotExposeRawPayload(t, text)
 }
 
 func TestNotifyIdleAfterDelayWaitsBeforeIdle(t *testing.T) {
@@ -809,15 +779,52 @@ func TestNotifyIdleAfterDelayWaitsBeforeIdle(t *testing.T) {
 	}
 }
 
-func decodeTextPayload(t *testing.T, result map[string]any) map[string]any {
+func resultText(t *testing.T, result map[string]any, wantIsError bool) string {
 	t.Helper()
-	if structured, ok := result["structuredContent"].(map[string]any); ok {
-		return structured
+	if _, ok := result["structuredContent"]; ok {
+		t.Fatalf("MCP result must not include structuredContent: %#v", result)
 	}
-	content := result["content"].([]map[string]string)
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(content[0]["text"]), &payload); err != nil {
-		t.Fatal(err)
+	if _, ok := result["is_error"]; ok {
+		t.Fatalf("MCP result must use isError key casing, got is_error: %#v", result)
 	}
-	return payload
+	isError, ok := result["isError"].(bool)
+	if !ok {
+		t.Fatalf("MCP result missing isError bool: %#v", result)
+	}
+	if isError != wantIsError {
+		t.Fatalf("unexpected isError value: got %v want %v in %#v", isError, wantIsError, result)
+	}
+	content, ok := result["content"].([]map[string]string)
+	if !ok || len(content) != 1 {
+		t.Fatalf("MCP result should contain one text content item, got %#v", result["content"])
+	}
+	if content[0]["type"] != "text" {
+		t.Fatalf("MCP content should be text, got %#v", content[0])
+	}
+	return content[0]["text"]
+}
+
+func failureResultText(t *testing.T, result map[string]any) string {
+	t.Helper()
+	text := resultText(t, result, true)
+	if !strings.Contains(text, "STATUS: failed") || !strings.Contains(text, "SUMMARY:") {
+		t.Fatalf("failure result should be compact status text, got:\n%s", text)
+	}
+	return text
+}
+
+func assertNoAuditTrail(t *testing.T, text string) {
+	t.Helper()
+	if strings.Contains(text, "## Audit Trail") {
+		t.Fatalf("visible MCP text must not include audit trail markdown:\n%s", text)
+	}
+}
+
+func assertFailureDoesNotExposeRawPayload(t *testing.T, text string) {
+	t.Helper()
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") || strings.Contains(trimmed, "\"ok\"") || strings.Contains(trimmed, "\"stderr\"") || strings.Contains(trimmed, "\"exit_code\"") {
+		t.Fatalf("failure response exposed raw JSON payload details:\n%s", text)
+	}
+	assertNoAuditTrail(t, text)
 }
