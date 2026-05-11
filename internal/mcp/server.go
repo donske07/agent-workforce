@@ -786,19 +786,22 @@ func forgeFailureSummary(result forgeResult, output, stderr string) string {
 	if result.Err != nil {
 		parts[0] = "Specialist execution failed: " + result.Err.Error() + "."
 	}
-	if diagnostic := firstNonEmpty(output, stderr); diagnostic != "" {
+	if diagnostic := forgeFailureDiagnostic(output, stderr); diagnostic != "" {
 		parts = append(parts, "Diagnostic: "+compactText(diagnostic, 800))
 	}
 	return strings.Join(parts, " ")
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
+func forgeFailureDiagnostic(output, stderr string) string {
+	output = strings.TrimSpace(output)
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return output
 	}
-	return ""
+	if output == "" || output == stderr {
+		return stderr
+	}
+	return stderr + " Additional output: " + output
 }
 
 func compactText(value string, limit int) string {

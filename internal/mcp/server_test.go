@@ -471,16 +471,19 @@ func TestSpecialistToolCallReturnsForgeFailure(t *testing.T) {
 		idleDelay:    0,
 		notifyOffice: func(agentID, state, title, officeURL string) bool { return true },
 		runForge: func(agent product.Agent, prompt string, onOutput forgeOutputHandler) forgeResult {
-			return forgeResult{Output: "", Stderr: "bad things", ExitCode: 7, Err: errors.New("exit status 7")}
+			return forgeResult{Output: finalAnswerStartMarker + "\npartial final status\n" + finalAnswerEndMarker, Stderr: "bad things", ExitCode: 7, Err: errors.New("exit status 7")}
 		},
 	}
 
 	result := state.handleToolCall(callParams{Name: product.AgentToolName("backend-programmer"), Arguments: map[string]any{"task": "do work"}})
 	text := failureResultText(t, result)
-	for _, want := range []string{"STATUS: failed", "AGENT: backend_programmer", "TASK: do work", "SUMMARY:", "exit status 7", "bad things", "FOLLOW_UP:"} {
+	for _, want := range []string{"STATUS: failed", "AGENT: backend_programmer", "TASK: do work", "SUMMARY:", "exit status 7", "bad things", "partial final status", "FOLLOW_UP:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("failure response missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Index(text, "bad things") > strings.Index(text, "partial final status") {
+		t.Fatalf("failure response should prefer stderr before final output:\n%s", text)
 	}
 	assertFailureDoesNotExposeRawPayload(t, text)
 }
