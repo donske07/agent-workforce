@@ -61,20 +61,18 @@ func resolveForgeEditor(config string) (string, error) {
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "editor") {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) == 2 {
-					return strings.Trim(strings.TrimSpace(parts[1]), `"'`), nil
-				}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 && strings.TrimSpace(parts[0]) == "editor" {
+				return strings.Trim(strings.TrimSpace(parts[1]), `"'`), nil
 			}
 		}
 	}
 	if v := os.Getenv("EDITOR"); v != "" {
 		return v, nil
 	}
-	return "", errors.New("No ForgeCode editor setting found. Configure editor in ForgeCode first.")
+	return "", errors.New("no ForgeCode editor setting found; configure editor in ForgeCode first")
 }
 
 func launchEditor(editor, path string) error {
@@ -173,7 +171,7 @@ func actionLabel(manage bool) string {
 
 func runManageSelector(agents []AgentInfo) (map[string]bool, bool, error) {
 	if !isTTY() {
-		return nil, false, errors.New("Interactive agent selection requires a TTY terminal.")
+		return nil, false, errors.New("interactive agent selection requires a TTY terminal")
 	}
 	state := map[string]bool{}
 	for _, a := range agents {
@@ -190,7 +188,7 @@ func runManageSelector(agents []AgentInfo) (map[string]bool, bool, error) {
 
 func runEditSelector(agents []AgentInfo) (string, bool, error) {
 	if !isTTY() {
-		return "", false, errors.New("Interactive agent selection requires a TTY terminal.")
+		return "", false, errors.New("interactive agent selection requires a TTY terminal")
 	}
 	model := selectorModel{title: "Agent Editor", agents: agents, manage: false, state: map[string]bool{}, selected: -1}
 	final, err := tea.NewProgram(model).Run()
