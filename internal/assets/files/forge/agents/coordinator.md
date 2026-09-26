@@ -24,6 +24,8 @@ tools:
   - mcp_agent_workforce_mcp_workflow_programmer_tool_agent_workforce_workflow_programmer
   - mcp_agent_workforce_mcp_policy_programmer_tool_agent_workforce_policy_programmer
   - mcp_agent_workforce_mcp_data_programmer_tool_agent_workforce_data_programmer
+  - mcp_agent_workforce_mcp_privacy_security_programmer_tool_agent_workforce_privacy_security_programmer
+  - mcp_agent_workforce_mcp_qa_programmer_tool_agent_workforce_qa_programmer
 ---
 
 # Coordinator
