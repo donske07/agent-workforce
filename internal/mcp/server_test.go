@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -728,6 +729,24 @@ func TestScopedRunStdioListsOnlySelectedAgentTool(t *testing.T) {
 	}
 	if len(response.Result.Tools) != 1 {
 		t.Fatalf("unexpected scoped stdio tool count: got %d want 1", len(response.Result.Tools))
+	}
+}
+
+func TestReadFramedMessageRejectsOversizedContentLength(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("Content-Length: 4194305\r\n\r\n"))
+
+	_, _, err := readFramedMessage(reader)
+	if err == nil {
+		t.Fatal("expected oversized framed message to fail")
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInt64FromAnyRejectsOverflowingUint(t *testing.T) {
+	if _, ok := int64FromAny(^uint(0)); ok {
+		t.Fatal("expected overflowing uint to be rejected")
 	}
 }
 

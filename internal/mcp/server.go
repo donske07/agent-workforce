@@ -39,6 +39,7 @@ const (
 	finalAnswerEndMarker    = "AGENT_WORKFORCE_FINAL_END"
 	maxFailureOutputChars   = 2000
 	maxForgeOutputChunkSize = 8000
+	maxStdioMessageBytes    = 4 << 20
 )
 
 const (
@@ -633,7 +634,7 @@ func int64FromAny(value any) (int64, bool) {
 	case int64:
 		return v, true
 	case uint:
-		return int64(v), true
+		return int64FromAny(uint64(v))
 	case uint8:
 		return int64(v), true
 	case uint16:
@@ -940,6 +941,9 @@ func readFramedMessage(reader *bufio.Reader) ([]byte, bool, error) {
 	}
 	if contentLength < 0 {
 		return nil, true, errors.New("missing Content-Length header")
+	}
+	if contentLength > maxStdioMessageBytes {
+		return nil, true, fmt.Errorf("Content-Length %d exceeds limit %d", contentLength, maxStdioMessageBytes)
 	}
 	body := make([]byte, contentLength)
 	_, err := io.ReadFull(reader, body)
