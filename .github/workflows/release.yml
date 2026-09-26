@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +32,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -36,11 +44,12 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -eu
           test -f LICENSE
-          version="${GITHUB_REF_NAME#v}"
-          archive="agent-workforce_${GITHUB_REF_NAME}_${GOOS}_${GOARCH}"
+          version="${RELEASE_TAG#v}"
+          archive="agent-workforce_${RELEASE_TAG}_${GOOS}_${GOARCH}"
           mkdir -p "dist/${archive}"
           flags="-s -w -X github.com/donske07/agent-workforce/internal/product.Version=${version}"
           go build -trimpath -ldflags="${flags}" -o "dist/${archive}/agent-workforce" ./cmd/agent-workforce
@@ -72,4 +81,10 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          fi
