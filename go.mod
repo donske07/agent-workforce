@@ -1,4 +1,4 @@
-module github.com/agent-workforce/agent-workforce
+module github.com/donske07/agent-workforce
 
 go 1.24.0
 

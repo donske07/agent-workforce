@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/agent-workforce/agent-workforce/internal/cli"
+	"github.com/donske07/agent-workforce/internal/cli"
 )
 
 func main() {

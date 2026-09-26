@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-workforce/agent-workforce/internal/product"
+	"github.com/donske07/agent-workforce/internal/product"
 	"github.com/spf13/cobra"
 )
 

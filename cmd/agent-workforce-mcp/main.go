@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	workforcemcp "github.com/agent-workforce/agent-workforce/internal/mcp"
+	workforcemcp "github.com/donske07/agent-workforce/internal/mcp"
 )
 
 func main() {

@@ -12,9 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-workforce/agent-workforce/internal/assets"
-	"github.com/agent-workforce/agent-workforce/internal/office"
-	"github.com/agent-workforce/agent-workforce/internal/product"
+	"github.com/donske07/agent-workforce/internal/assets"
+	"github.com/donske07/agent-workforce/internal/office"
+	"github.com/donske07/agent-workforce/internal/product"
 )
 
 const (

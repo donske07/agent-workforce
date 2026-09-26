@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-workforce/agent-workforce/internal/assets"
-	"github.com/agent-workforce/agent-workforce/internal/product"
+	"github.com/donske07/agent-workforce/internal/assets"
+	"github.com/donske07/agent-workforce/internal/product"
 )
 
 func writeMCPConfig(opts CommonOptions) (string, error) {

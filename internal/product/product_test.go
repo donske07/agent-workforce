@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-workforce/agent-workforce/internal/assets"
+	"github.com/donske07/agent-workforce/internal/assets"
 )
 
 func TestAgentRegistryHasUniqueIDsAndToolNames(t *testing.T) {

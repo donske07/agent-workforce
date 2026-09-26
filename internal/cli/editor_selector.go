@@ -11,7 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/agent-workforce/agent-workforce/internal/assets"
+	"github.com/donske07/agent-workforce/internal/assets"
 )
 
 func editAgent(config, id string) error {

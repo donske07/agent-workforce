@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agent-workforce/agent-workforce/internal/assets"
-	"github.com/agent-workforce/agent-workforce/internal/product"
+	"github.com/donske07/agent-workforce/internal/assets"
+	"github.com/donske07/agent-workforce/internal/product"
 )
 
 func installAssets(opts CommonOptions) (*Manifest, error) {

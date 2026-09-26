@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-workforce/agent-workforce/internal/product"
+	"github.com/donske07/agent-workforce/internal/product"
 )
 
 func useTempHome(t *testing.T) string {

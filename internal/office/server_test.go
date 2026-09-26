@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-workforce/agent-workforce/internal/product"
+	"github.com/donske07/agent-workforce/internal/product"
 )
 
 func TestAgentsJSUsesProductRegistry(t *testing.T) {
