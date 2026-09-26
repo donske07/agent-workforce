@@ -209,15 +209,11 @@ func coordinatorToolProfile() []string {
 }
 
 func coordinatorMCPAgentIDs() []string {
-	return []string{
-		"mcp-agent-platform-programmer",
-		"backend-programmer",
-		"frontend-programmer",
-		"ai-model-programmer",
-		"workflow-programmer",
-		"policy-programmer",
-		"data-programmer",
+	ids := make([]string, 0, len(SpecialistAgents()))
+	for _, agent := range SpecialistAgents() {
+		ids = append(ids, agent.ID)
 	}
+	return ids
 }
 
 func programmerToolProfile() []string {

@@ -8,7 +8,6 @@ import (
 
 const (
 	PackageName           = "agent-workforce"
-	Version               = "0.1.0"
 	DefaultOfficeHost     = "127.0.0.1"
 	DefaultOfficePort     = 8765
 	MCPCommand            = "agent-workforce-mcp"
@@ -19,6 +18,8 @@ const (
 	AgentIdleDelay        = 3 * time.Second
 	CoordinatorAgentID    = "coordinator"
 )
+
+var Version = "0.1.0"
 
 type Agent struct {
 	ID          string `json:"id"`
