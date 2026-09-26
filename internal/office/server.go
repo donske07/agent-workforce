@@ -6,16 +6,21 @@ import (
 	"io/fs"
 	"log"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/donske07/agent-workforce/internal/assets"
 	"github.com/donske07/agent-workforce/internal/product"
 )
 
 type Event map[string]any
+
+const maxEventBodyBytes = 1 << 20
 
 type Broker struct {
 	mu      sync.Mutex
@@ -80,6 +85,10 @@ func NewHandler() http.Handler {
 	})
 
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -88,7 +97,6 @@ func NewHandler() http.Handler {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		ch := make(chan Event, 16)
 		broker.Add(ch)
 		defer broker.Remove(ch)
@@ -115,7 +123,7 @@ func NewHandler() http.Handler {
 			State   string `json:"state"`
 			Title   string `json:"title"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := decodeJSONBody(w, r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
 			return
 		}
@@ -140,7 +148,7 @@ func NewHandler() http.Handler {
 			return
 		}
 		var body Event
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := decodeJSONBody(w, r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
 			return
 		}
@@ -178,13 +186,22 @@ func NewHandler() http.Handler {
 		}
 		_, _ = w.Write(data)
 	})
-	return mux
+	return sameOriginOnly(mux)
 }
 
 func Run(host string, port int) error {
+	if !loopbackHost(host) {
+		return fmt.Errorf("office host must be localhost or a loopback IP address: %s", host)
+	}
 	addr := fmt.Sprintf("%s:%d", host, port)
 	fmt.Printf("Forge Agent Office running at http://%s\n", addr)
-	server := &http.Server{Addr: addr, Handler: NewHandler()}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           NewHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Print(err)
 		return err
@@ -194,9 +211,53 @@ func Run(host string, port int) error {
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxEventBodyBytes)
+	return json.NewDecoder(r.Body).Decode(target)
+}
+
+func sameOriginOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if !requestHostAllowed(r.Host) || !requestOriginAllowed(r) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func requestHostAllowed(hostPort string) bool {
+	host := hostPort
+	if parsedHost, _, err := net.SplitHostPort(hostPort); err == nil {
+		host = parsedHost
+	}
+	return loopbackHost(strings.Trim(host, "[]"))
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func requestOriginAllowed(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 func validateForgeEvent(event Event) error {

@@ -61,6 +61,68 @@ func TestAgentStateRejectsInvalidState(t *testing.T) {
 	}
 }
 
+func TestOfficeRejectsCrossOriginEventReads(t *testing.T) {
+	server := httptest.NewServer(NewHandler())
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "https://attacker.example")
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected status: got %d want %d", resp.StatusCode, http.StatusForbidden)
+	}
+	if origin := resp.Header.Get("Access-Control-Allow-Origin"); origin != "" {
+		t.Fatalf("cross-origin response must not opt into CORS, got %q", origin)
+	}
+}
+
+func TestOfficeRejectsCrossOriginSimplePost(t *testing.T) {
+	server := httptest.NewServer(NewHandler())
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/forge-event", strings.NewReader(`{"type":"forge_output","run_id":"run-1","agent_id":"frontend-programmer","stream":"stdout","chunk":"forged"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Origin", "https://attacker.example")
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected status: got %d want %d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestOfficeRejectsSameOriginRequest_whenHostIsNotLoopback(t *testing.T) {
+	// Given
+	req := httptest.NewRequest(http.MethodGet, "http://attacker.example/health", nil)
+	req.Host = "attacker.example"
+	req.Header.Set("Origin", "http://attacker.example")
+	recorder := httptest.NewRecorder()
+
+	// When
+	NewHandler().ServeHTTP(recorder, req)
+
+	// Then
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status: got %d want %d", recorder.Code, http.StatusForbidden)
+	}
+}
+
 func TestForgeEventAcceptsValidOutputEvent(t *testing.T) {
 	server := httptest.NewServer(NewHandler())
 	defer server.Close()
