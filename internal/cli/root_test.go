@@ -105,8 +105,8 @@ func TestNewCommandReturnsForgeRunnerError(t *testing.T) {
 	}
 	t.Cleanup(func() { coordinatorForgeRunner = previous })
 
-	cmd := newCommand(&CommonOptions{ForgeBin: "/custom/forge"})
-	cmd.SetArgs(nil)
+	cmd := newCommand(&CommonOptions{})
+	cmd.SetArgs([]string{"--forge-bin", "/custom/forge"})
 
 	err := cmd.Execute()
 	if !errors.Is(err, wantErr) {
