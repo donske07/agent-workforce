@@ -27,7 +27,7 @@ func installAssets(opts CommonOptions) (*Manifest, error) {
 			return nil, err
 		}
 	}
-	manifest := &Manifest{SchemaVersion: 1, Package: PackageName, Version: Version, InstalledAt: now(), UpdatedAt: now(), LegacyCleanup: cleanup}
+	manifest := &Manifest{SchemaVersion: 1, Package: PackageName, Version: product.Version, InstalledAt: now(), UpdatedAt: now(), LegacyCleanup: cleanup}
 	manifest.Forge = map[string]any{"configDir": config, "agentsDir": agentsDir, "skillsDir": skillsDir}
 	manifest.MCP = map[string]any{"serverNamePrefix": product.MCPCommand, "serverCount": len(product.SpecialistAgents()), "configWritten": false, "command": MCPCommand}
 	agents, err := inventory(config)
@@ -36,11 +36,18 @@ func installAssets(opts CommonOptions) (*Manifest, error) {
 	}
 	for _, a := range agents {
 		active := a.Active
-		sha, err := fileSHA(a.Path)
+		manifestPath := a.Path
+		if a.Source == "custom" {
+			manifestPath = filepath.Join(agentsDir, a.ID+".md")
+			if !a.Active {
+				manifestPath = filepath.Join(disabledAgentDir(agentsDir), a.ID+".md")
+			}
+		}
+		sha, err := fileSHA(manifestPath)
 		if err != nil {
 			return nil, err
 		}
-		manifest.Agents = append(manifest.Agents, ManifestRecord{ID: a.ID, Path: a.Path, Source: a.Source, Active: &active, SHA256: sha})
+		manifest.Agents = append(manifest.Agents, ManifestRecord{ID: a.ID, Path: manifestPath, Source: a.Source, Active: &active, SHA256: sha})
 	}
 	for _, skill := range bundledSkills {
 		p := filepath.Join(skillsDir, skill, "SKILL.md")
