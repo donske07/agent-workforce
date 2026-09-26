@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,8 +95,8 @@ func forgeConfigDir(flag string) string {
 		return flag
 	}
 	for index, arg := range os.Args {
-		if strings.HasPrefix(arg, "--forge-config=") {
-			return strings.TrimPrefix(arg, "--forge-config=")
+		if config, ok := strings.CutPrefix(arg, "--forge-config="); ok {
+			return config
 		}
 		if arg == "--forge-config" && index+1 < len(os.Args) {
 			return os.Args[index+1]
@@ -117,21 +118,11 @@ func disabledAgentDir(agentsDir string) string {
 }
 
 func isBundled(id string) bool {
-	for _, v := range bundledAgents {
-		if v == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(bundledAgents, id)
 }
 
 func isLegacy(id string) bool {
-	for _, v := range legacyAgents {
-		if v == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(legacyAgents, id)
 }
 
 func titleFromID(id string) string {
@@ -241,6 +232,9 @@ func loadAgentState() (map[string]bool, error) {
 	}
 	out := map[string]bool{}
 	if err := json.Unmarshal(data, &out); err == nil {
+		if out == nil {
+			return nil, fmt.Errorf("load agent state %s: state must be a JSON object", agentStatePath())
+		}
 		return out, nil
 	}
 	legacy := struct {
