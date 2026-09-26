@@ -240,6 +240,7 @@ h1 {
 }
 
 .office-wrap {
+  container-type: inline-size;
   min-height: 0;
   overflow: auto;
   padding: 1.25rem;
@@ -327,24 +328,16 @@ h1 {
 .office {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, minmax(12rem, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2rem 1.25rem;
-  min-width: 56rem;
+  min-width: 0;
   min-height: calc(100vh - 5rem);
   padding: 2rem;
   border: 4px solid var(--line);
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / 32px 32px,
     linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / 32px 32px,
-    linear-gradient(180deg, #202944 0 60%, var(--floor) 60% 100%);
-}
-
-.office::before {
-  content: "";
-  position: absolute;
-  inset: 58% 0 auto;
-  height: 4px;
-  background: #0b0e18;
+    linear-gradient(180deg, #202944 0%, var(--floor) 100%);
 }
 
 .desk {
@@ -360,10 +353,6 @@ h1 {
 .desk.is-thinking {
   border-color: rgba(114, 241, 184, 0.35);
   background: rgba(114, 241, 184, 0.04);
-}
-
-.desk.is-thinking .monitor {
-  animation: monitor-glow 700ms steps(2, end) infinite;
 }
 
 .bubble {
@@ -434,6 +423,10 @@ h1 {
   border: 3px solid #0b0e18;
   background: #1ee3cf;
   box-shadow: inset 0 0 0 6px #102037;
+}
+
+.desk.is-thinking .monitor {
+  animation: monitor-glow 700ms steps(2, end) infinite;
 }
 
 .monitor::after {
@@ -554,7 +547,7 @@ h1 {
   min-height: 2.4rem;
   margin: 0;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   line-height: 1.35;
   text-align: center;
 }
@@ -608,5 +601,23 @@ h1 {
 
   .office {
     min-height: 54rem;
+  }
+}
+
+@container (max-width: 56rem) {
+  .office {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 40rem) {
+  .office {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 25rem) {
+  .office {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
